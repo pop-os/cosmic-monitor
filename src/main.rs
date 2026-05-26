@@ -14,6 +14,7 @@ use cosmic::{
     widget::{
         self,
         about::About,
+        canvas,
         menu::{action::MenuAction, key_bind::KeyBind},
         nav_bar, segmented_button,
         table::{ItemCategory, ItemInterface},
@@ -29,6 +30,9 @@ use std::{
 
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
+
+use graph::{Graph, GraphKind};
+mod graph;
 
 use info::{GraphItem, ProcessCategory, ProcessItem};
 mod info;
@@ -314,7 +318,7 @@ impl Application for App {
         let mut nav_model = nav_bar::Model::builder();
         for &page in NavPage::all() {
             nav_model = nav_model.insert(|mut b| {
-                if matches!(page, NavPage::Processes) {
+                if matches!(page, NavPage::CPU) {
                     b = b.activate();
                 }
                 b.text(page.title()).data::<NavPage>(page)
@@ -528,8 +532,13 @@ impl Application for App {
             }
             NavPage::CPU => {
                 if let Some(graph_item) = &self.graph_snapshot {
-                    let mut column =
-                        widget::column::with_capacity(graph_item.cpus.len()).width(Length::Fill);
+                    let mut column = widget::column::with_capacity(graph_item.cpus.len() + 1)
+                        .width(Length::Fill);
+                    column = column.push(
+                        canvas(Graph::new(GraphKind::Cpu, &self.graph_history))
+                            .height(300.0)
+                            .width(Length::Fill),
+                    );
                     for cpu in graph_item.cpus.iter() {
                         let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
                         row = row.push(
@@ -553,7 +562,7 @@ impl Application for App {
             NavPage::Memory => {
                 if let Some(graph_item) = &self.graph_snapshot {
                     let mem = &graph_item.memory;
-                    let mut column = widget::column::with_capacity(5).width(Length::Fill);
+                    let mut column = widget::column::with_capacity(7).width(Length::Fill);
                     column = column.push(widget::text(format!(
                         "Memory used: {} ({:.1}%)",
                         humansize::format_size(mem.used, humansize::BINARY),
@@ -563,6 +572,11 @@ impl Application for App {
                         "Memory total: {}",
                         humansize::format_size(mem.total, humansize::BINARY)
                     )));
+                    column = column.push(
+                        canvas(Graph::new(GraphKind::Memory, &self.graph_history))
+                            .height(300.0)
+                            .width(Length::Fill),
+                    );
                     column = column.push(widget::space().height(20.0));
                     column = column.push(widget::text(format!(
                         "Swap used: {} ({:.1}%)",
@@ -573,6 +587,11 @@ impl Application for App {
                         "Swap total: {}",
                         humansize::format_size(mem.swap_total, humansize::BINARY)
                     )));
+                    column = column.push(
+                        canvas(Graph::new(GraphKind::Swap, &self.graph_history))
+                            .height(300.0)
+                            .width(Length::Fill),
+                    );
                     column.into()
                 } else {
                     widget::indeterminate_circular().into()
