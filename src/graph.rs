@@ -8,19 +8,23 @@ use std::{collections::VecDeque, time::Instant};
 use super::{Message, info::GraphItem};
 
 #[derive(Clone, Copy, Debug)]
-pub enum GraphKind {
+pub enum GraphKind<'a> {
     Cpu,
     Memory,
     Swap,
+    DiskRead(&'a str),
+    DiskWrite(&'a str),
+    NetworkRx(&'a str),
+    NetworkTx(&'a str),
 }
 
 pub struct Graph<'a> {
-    pub kind: GraphKind,
+    pub kind: GraphKind<'a>,
     pub history: &'a VecDeque<GraphItem>,
 }
 
 impl<'a> Graph<'a> {
-    pub fn new(kind: GraphKind, history: &'a VecDeque<GraphItem>) -> Self {
+    pub fn new(kind: GraphKind<'a>, history: &'a VecDeque<GraphItem>) -> Self {
         Self { kind, history }
     }
 }
@@ -46,12 +50,59 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         //let bg_radius = cosmic.radius_s();
         let bg_radius = cosmic.radius_0();
 
-        let calc_x = |time: f32| -> f32 { (1.0 - time / 60.0) * (bounds.width - 48.0) };
-        let calc_y = |value: f32| -> f32 { (1.0 - value / 100.0) * (bounds.height - 20.0) };
+        let calc_x = |time: f32| -> f32 { (1.0 - time / 60.0) * (bounds.width - 80.0) };
+        let scale_y = match self.kind {
+            GraphKind::Cpu | GraphKind::Memory | GraphKind::Swap => 100.0,
+            GraphKind::DiskRead(disk_name) => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
+                        max = disk.read.max(max);
+                    }
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
+            GraphKind::DiskWrite(disk_name) => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
+                        max = disk.write.max(max);
+                    }
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
+            GraphKind::NetworkRx(network_name) => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    for network in graph_item
+                        .networks
+                        .iter()
+                        .filter(|x| x.name == network_name)
+                    {
+                        max = network.rx.max(max);
+                    }
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
+            GraphKind::NetworkTx(network_name) => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    for network in graph_item
+                        .networks
+                        .iter()
+                        .filter(|x| x.name == network_name)
+                    {
+                        max = network.tx.max(max);
+                    }
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
+        };
+        let calc_y = |value: f32| -> f32 { (1.0 - value / scale_y) * (bounds.height - 20.0) };
 
         let min_x = calc_x(60.0);
         let max_x = calc_x(0.0);
-        let min_y = calc_y(100.0);
+        let min_y = calc_y(scale_y);
         let max_y = calc_y(0.0);
 
         //TODO: use cache
@@ -119,36 +170,83 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         );
 
         // Draw Y axis info
-        text(
-            "0%",
-            Point::new(max_x, calc_y(0.0)),
-            Alignment::Left,
-            Vertical::Bottom,
-            &mut frame,
-        );
-        for &(value, string) in &[(20.0, "20%"), (40.0, "40%"), (60.0, "60%"), (80.0, "80%")] {
-            let y = calc_y(value);
-            let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
-            frame.stroke(
-                &path,
-                canvas::Stroke::default().with_color(accent_color_0_5),
-            );
+        match self.kind {
+            GraphKind::Cpu | GraphKind::Memory | GraphKind::Swap => {
+                text(
+                    "0%",
+                    Point::new(max_x, calc_y(0.0)),
+                    Alignment::Left,
+                    Vertical::Bottom,
+                    &mut frame,
+                );
+                for &(value, string) in
+                    &[(20.0, "20%"), (40.0, "40%"), (60.0, "60%"), (80.0, "80%")]
+                {
+                    let y = calc_y(value);
+                    let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default().with_color(accent_color_0_5),
+                    );
 
-            text(
-                string,
-                Point::new(max_x, y),
-                Alignment::Left,
-                Vertical::Center,
-                &mut frame,
-            );
+                    text(
+                        string,
+                        Point::new(max_x, y),
+                        Alignment::Left,
+                        Vertical::Center,
+                        &mut frame,
+                    );
+                }
+                text(
+                    "100%",
+                    Point::new(max_x, calc_y(100.0)),
+                    Alignment::Left,
+                    Vertical::Top,
+                    &mut frame,
+                );
+            }
+            GraphKind::DiskRead(_)
+            | GraphKind::DiskWrite(_)
+            | GraphKind::NetworkRx(_)
+            | GraphKind::NetworkTx(_) => {
+                //TODO: automatic Y scale for these graphs
+                text(
+                    "0 B/s",
+                    Point::new(max_x, calc_y(0.0)),
+                    Alignment::Left,
+                    Vertical::Bottom,
+                    &mut frame,
+                );
+                let format_options =
+                    humansize::FormatSizeOptions::from(humansize::DECIMAL).decimal_places(0);
+                for &value in &[scale_y * 0.2, scale_y * 0.4, scale_y * 0.6, scale_y * 0.8] {
+                    let y = calc_y(value);
+                    let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default().with_color(accent_color_0_5),
+                    );
+
+                    text(
+                        &format!("{}/s", humansize::format_size(value as u64, format_options)),
+                        Point::new(max_x, y),
+                        Alignment::Left,
+                        Vertical::Center,
+                        &mut frame,
+                    );
+                }
+                text(
+                    &format!(
+                        "{}/s",
+                        humansize::format_size(scale_y as u64, format_options)
+                    ),
+                    Point::new(max_x, calc_y(scale_y)),
+                    Alignment::Left,
+                    Vertical::Top,
+                    &mut frame,
+                );
+            }
         }
-        text(
-            "100%",
-            Point::new(max_x, calc_y(100.0)),
-            Alignment::Left,
-            Vertical::Top,
-            &mut frame,
-        );
 
         // Draw values
         let start = self
@@ -177,6 +275,42 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 GraphKind::Swap => {
                     100.0 * (graph_item.memory.swap_used as f32)
                         / (graph_item.memory.swap_total as f32)
+                }
+                GraphKind::DiskRead(disk_name) => {
+                    let mut total = 0.0;
+                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
+                        total += disk.read as f32;
+                    }
+                    total
+                }
+                GraphKind::DiskWrite(disk_name) => {
+                    let mut total = 0.0;
+                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
+                        total += disk.write as f32;
+                    }
+                    total
+                }
+                GraphKind::NetworkRx(network_name) => {
+                    let mut total = 0.0;
+                    for network in graph_item
+                        .networks
+                        .iter()
+                        .filter(|x| x.name == network_name)
+                    {
+                        total += network.rx as f32;
+                    }
+                    total
+                }
+                GraphKind::NetworkTx(network_name) => {
+                    let mut total = 0.0;
+                    for network in graph_item
+                        .networks
+                        .iter()
+                        .filter(|x| x.name == network_name)
+                    {
+                        total += network.tx as f32;
+                    }
+                    total
                 }
             };
             let y = calc_y(value);

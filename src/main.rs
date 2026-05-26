@@ -469,7 +469,6 @@ impl Application for App {
     /// Creates a view after each update.
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
-            space_xxl,
             space_m,
             space_s,
             space_xs,
@@ -673,7 +672,6 @@ impl Application for App {
                                         100.0 * (mem.swap_used as f64) / (mem.swap_total as f64)
                                     ))
                                 ),
-                                //TODO: cache, total
                             )
                             .spacing(space_m),
                             canvas(Graph::new(GraphKind::Swap, &self.graph_history))
@@ -690,7 +688,7 @@ impl Application for App {
             }
             NavPage::Disk => {
                 if let Some(graph_item) = &self.graph_snapshot {
-                    let mut column = widget::column::with_capacity(graph_item.disks.len() * 6)
+                    let mut column = widget::column::with_capacity(graph_item.disks.len() * 8)
                         .width(Length::Fill);
                     for disk in graph_item.disks.iter() {
                         column = column.push(widget::text(format!("Name: {}", disk.name)));
@@ -707,10 +705,26 @@ impl Application for App {
                             "Read: {}/s",
                             humansize::format_size(disk.read as u64, humansize::DECIMAL)
                         )));
+                        column = column.push(
+                            canvas(Graph::new(
+                                GraphKind::DiskRead(&disk.name),
+                                &self.graph_history,
+                            ))
+                            .height(300.0)
+                            .width(Length::Fill),
+                        );
                         column = column.push(widget::text(format!(
                             "Write: {}/s",
                             humansize::format_size(disk.write as u64, humansize::DECIMAL)
                         )));
+                        column = column.push(
+                            canvas(Graph::new(
+                                GraphKind::DiskWrite(&disk.name),
+                                &self.graph_history,
+                            ))
+                            .height(300.0)
+                            .width(Length::Fill),
+                        );
                         column = column.push(widget::space().height(20.0));
                     }
                     column.into()
@@ -720,7 +734,7 @@ impl Application for App {
             }
             NavPage::Network => {
                 if let Some(graph_item) = &self.graph_snapshot {
-                    let mut column = widget::column::with_capacity(graph_item.networks.len() * 4)
+                    let mut column = widget::column::with_capacity(graph_item.networks.len() * 6)
                         .width(Length::Fill);
                     for net in graph_item.networks.iter() {
                         column = column.push(widget::text(format!("Name: {}", net.name)));
@@ -728,10 +742,26 @@ impl Application for App {
                             "Rx: {}/s",
                             humansize::format_size(net.rx as u64, humansize::DECIMAL)
                         )));
+                        column = column.push(
+                            canvas(Graph::new(
+                                GraphKind::NetworkRx(&net.name),
+                                &self.graph_history,
+                            ))
+                            .height(300.0)
+                            .width(Length::Fill),
+                        );
                         column = column.push(widget::text(format!(
                             "Tx: {}/s",
                             humansize::format_size(net.tx as u64, humansize::DECIMAL)
                         )));
+                        column = column.push(
+                            canvas(Graph::new(
+                                GraphKind::NetworkTx(&net.name),
+                                &self.graph_history,
+                            ))
+                            .height(300.0)
+                            .width(Length::Fill),
+                        );
                         column = column.push(widget::space().height(20.0));
                     }
                     column.into()

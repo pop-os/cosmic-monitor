@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 use sysinfo::{
-    CpuRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind, RefreshKind, System,
-    UpdateKind, Users,
+    Components, CpuRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind,
+    RefreshKind, System, UpdateKind, Users,
 };
 use tokio::sync::mpsc;
 
@@ -94,6 +94,19 @@ pub fn worker() -> impl Stream<Item = Message> {
         {
             let tx = tx.clone();
             thread::spawn(move || {
+                //TODO: use components
+                let components = Components::new_with_refreshed_list();
+                for component in components.list() {
+                    eprintln!(
+                        "{:?}: {}: {:?}",
+                        component.id(),
+                        component.label(),
+                        component.temperature()
+                    );
+                }
+
+                // Ignore first samples so disk and network speeds are accurate
+                let mut ignore = 4;
                 let mut sys = System::new();
                 let mut disks = Disks::new();
                 let mut networks = Networks::new();
@@ -108,9 +121,13 @@ pub fn worker() -> impl Stream<Item = Message> {
                     networks.refresh(true);
 
                     let graph_item = GraphItem::new(time, &sys, &disks, &networks, graph_refresh);
-                    match tx.blocking_send(Message::Graph(graph_item)) {
-                        Ok(()) => {}
-                        Err(_) => break,
+                    if ignore > 0 {
+                        ignore -= 1;
+                    } else {
+                        match tx.blocking_send(Message::Graph(graph_item)) {
+                            Ok(()) => {}
+                            Err(_) => break,
+                        }
                     }
                     thread::sleep(graph_refresh);
                 }
