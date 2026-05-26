@@ -9,6 +9,21 @@ memory = Memory
 disk = Disk
 network = Network
 
+## CPU
+overall-utilization = Overall Utilization
+speed = Speed
+temperature = Temperature
+utilization = Utilization
+utilization-per-core = Utilization per Core
+
+## Memory
+cache = Cache
+capacity = Capacity
+in-use = In use
+memory-usage = Memory Usage
+swap-usage = Swap Usage
+total-utilization = Total utilization
+
 # Context Pages
 
 ## About

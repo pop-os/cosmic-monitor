@@ -318,7 +318,7 @@ impl Application for App {
         let mut nav_model = nav_bar::Model::builder();
         for &page in NavPage::all() {
             nav_model = nav_model.insert(|mut b| {
-                if matches!(page, NavPage::CPU) {
+                if matches!(page, NavPage::Processes) {
                     b = b.activate();
                 }
                 b.text(page.title()).data::<NavPage>(page)
@@ -469,17 +469,19 @@ impl Application for App {
     /// Creates a view after each update.
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
+            space_xxl,
             space_m,
             space_s,
             space_xs,
+            space_xxs,
             ..
         } = theme::active().cosmic().spacing;
 
-        let content: Element<Message> = match self
+        let nav_page = self
             .nav_model
             .active_data()
-            .map_or(NavPage::Processes, |x| *x)
-        {
+            .map_or(NavPage::Processes, |x| *x);
+        let content: Element<Message> = match nav_page {
             NavPage::Processes => {
                 //TODO: table is too slow, this uses list to emulate table
                 let categories = ProcessCategory::all();
@@ -538,15 +540,42 @@ impl Application for App {
                     .into()
             }
             NavPage::CPU => {
+                let mut column = widget::column::with_capacity(3)
+                    .spacing(space_m)
+                    .width(Length::Fill);
+                column = column.push(widget::text::title2(nav_page.title()));
+
                 if let Some(graph_item) = &self.graph_snapshot {
-                    let mut column = widget::column::with_capacity(2)
-                        .spacing(space_m)
-                        .width(Length::Fill);
+                    // Overall utilization
                     column = column.push(
-                        canvas(Graph::new(GraphKind::Cpu, &self.graph_history))
-                            .height(300.0)
-                            .width(Length::Fill),
+                        widget::column!(
+                            widget::text::title4(fl!("overall-utilization")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("utilization")),
+                                    widget::text::heading(format!(
+                                        "{:.1}%",
+                                        graph_item.total_cpu_usage()
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("speed")),
+                                    widget::text::heading("TODO GHz")
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("temperature")),
+                                    widget::text::heading("TODO °C")
+                                ),
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::Cpu, &self.graph_history))
+                                .height(300.0)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs),
                     );
+
+                    // Utilization per core
                     let mut children = Vec::with_capacity(graph_item.cpus.len());
                     for cpu in graph_item.cpus.iter() {
                         let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
@@ -564,52 +593,100 @@ impl Application for App {
                             .push(widget::column!(widget::text::heading(&cpu.name), row).into());
                     }
                     column = column.push(
-                        widget::flex_row(children)
-                            .column_spacing(space_s)
-                            .row_spacing(space_xs),
+                        widget::column!(
+                            widget::text::title4(fl!("utilization-per-core")),
+                            widget::flex_row(children)
+                                .column_spacing(space_s)
+                                .row_spacing(space_xs)
+                        )
+                        .spacing(space_xxs),
                     );
-                    column.into()
                 } else {
-                    widget::indeterminate_circular().into()
+                    column = column.push(widget::indeterminate_circular());
                 }
+
+                column.into()
             }
             NavPage::Memory => {
+                let mut column = widget::column::with_capacity(3)
+                    .spacing(space_m)
+                    .width(Length::Fill);
+                column = column.push(widget::text::title2(nav_page.title()));
+
                 if let Some(graph_item) = &self.graph_snapshot {
                     let mem = &graph_item.memory;
-                    let mut column = widget::column::with_capacity(7).width(Length::Fill);
-                    column = column.push(widget::text(format!(
-                        "Memory used: {} ({:.1}%)",
-                        humansize::format_size(mem.used, humansize::BINARY),
-                        100.0 * (mem.used as f64) / (mem.total as f64)
-                    )));
-                    column = column.push(widget::text(format!(
-                        "Memory total: {}",
-                        humansize::format_size(mem.total, humansize::BINARY)
-                    )));
+
+                    // Memory information
                     column = column.push(
-                        canvas(Graph::new(GraphKind::Memory, &self.graph_history))
-                            .height(300.0)
-                            .width(Length::Fill),
+                        widget::column!(
+                            widget::text::title4(fl!("memory-usage")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("capacity")),
+                                    widget::text::heading(
+                                        humansize::format_size(mem.total, humansize::BINARY)
+                                            .to_string()
+                                    )
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("in-use")),
+                                    widget::text::heading(format!(
+                                        "{} ({:.1}%)",
+                                        humansize::format_size(mem.used, humansize::BINARY),
+                                        100.0 * (mem.used as f64) / (mem.total as f64)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("cache")),
+                                    widget::text::heading("TODO")
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("total-utilization")),
+                                    widget::text::heading("TODO")
+                                ),
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::Memory, &self.graph_history))
+                                .height(300.0)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs),
                     );
-                    column = column.push(widget::space().height(20.0));
-                    column = column.push(widget::text(format!(
-                        "Swap used: {} ({:.1}%)",
-                        humansize::format_size(mem.swap_used, humansize::BINARY),
-                        100.0 * (mem.swap_used as f64) / (mem.swap_total as f64)
-                    )));
-                    column = column.push(widget::text(format!(
-                        "Swap total: {}",
-                        humansize::format_size(mem.swap_total, humansize::BINARY)
-                    )));
+
+                    // Swap information
                     column = column.push(
-                        canvas(Graph::new(GraphKind::Swap, &self.graph_history))
-                            .height(300.0)
-                            .width(Length::Fill),
+                        widget::column!(
+                            widget::text::title4(fl!("swap-usage")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("capacity")),
+                                    widget::text::heading(
+                                        humansize::format_size(mem.swap_total, humansize::BINARY)
+                                            .to_string()
+                                    )
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("in-use")),
+                                    widget::text::heading(format!(
+                                        "{} ({:.1}%)",
+                                        humansize::format_size(mem.swap_used, humansize::BINARY),
+                                        100.0 * (mem.swap_used as f64) / (mem.swap_total as f64)
+                                    ))
+                                ),
+                                //TODO: cache, total
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::Swap, &self.graph_history))
+                                .height(300.0)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs),
                     );
-                    column.into()
                 } else {
-                    widget::indeterminate_circular().into()
+                    column = column.push(widget::indeterminate_circular())
                 }
+
+                column.into()
             }
             NavPage::Disk => {
                 if let Some(graph_item) = &self.graph_snapshot {
