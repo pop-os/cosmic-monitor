@@ -28,17 +28,23 @@ fn main() {
             let Some((key, value)) = line.split_once(":") else {
                 continue;
             };
-            let value = value.trim_start();
             // https://docs.kernel.org/gpu/drm-usage-stats.html
             if let Some(key) = key.strip_prefix("drm-") {
+                let value = value.trim_start();
                 if let Some(key) = key.strip_prefix("total-") {
-                    println!("  total {}: {}", key, value);
+                    let Some((value, suffix)) = value.split_once(' ') else {
+                        continue;
+                    };
+                    println!("  total {}: {} {}", key, value, suffix);
                 }
                 if let Some(key) = key.strip_prefix("engine-") {
                     if key.starts_with("capacity-") {
                         continue;
                     }
-                    println!("  engine {}: {}", key, value);
+                    let Some((value, suffix)) = value.split_once(' ') else {
+                        continue;
+                    };
+                    println!("  engine {}: {} {}", key, value, suffix);
                 }
             }
         }
