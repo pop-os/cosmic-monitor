@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::linux::fs::MetadataExt,
     path::Path,
     time::{Duration, Instant},
 };
@@ -9,8 +10,9 @@ fn main() {
     let mut fdinfos = Vec::new();
 
     let instant = Instant::now();
-    for pid in std::env::args().skip(1) {
-        let proc_path = Path::new("/proc").join(&pid);
+    for pid_str in std::env::args().skip(1) {
+        let pid = pid_str.parse::<libc::pid_t>().unwrap();
+        let proc_path = Path::new("/proc").join(pid_str);
         let proc_fd_path = proc_path.join("fd");
         let proc_fdinfo_path = proc_path.join("fdinfo");
         let Ok(entries) = fs::read_dir(&proc_fd_path) else {
@@ -19,13 +21,17 @@ fn main() {
         for entry_res in entries {
             let Ok(entry) = entry_res else { continue };
             let path = entry.path();
-            let Ok(link) = fs::read_link(&path) else {
+            let Ok(metadata) = fs::metadata(&path) else {
                 continue;
             };
-            if link.starts_with("/dev/dri") {
+            // DRI devices are character devices with major dev number 226
+            // https://www.kernel.org/doc/Documentation/admin-guide/devices.txt
+            if metadata.st_mode() & libc::S_IFMT == libc::S_IFCHR
+                && libc::major(metadata.st_rdev()) == 226
+            {
                 let name = entry.file_name();
                 if let Ok(data) = fs::read_to_string(proc_fdinfo_path.join(&name)) {
-                    fdinfos.push((pid.clone(), name, link, data));
+                    fdinfos.push((pid, name, libc::minor(metadata.st_rdev()), data));
                 }
             }
         }
@@ -33,8 +39,8 @@ fn main() {
     let elapsed = instant.elapsed();
 
     let instant = Instant::now();
-    for (pid, name, link, data) in fdinfos {
-        println!("{}: {}: {}", pid, name.display(), link.display());
+    for (pid, name, minor, data) in fdinfos {
+        println!("PID {}: FD {}: CARD {}", pid, name.display(), minor);
         for line in data.lines() {
             let Some((key, value)) = line.split_once(":") else {
                 continue;
@@ -42,6 +48,9 @@ fn main() {
             // https://docs.kernel.org/gpu/drm-usage-stats.html
             if let Some(key) = key.strip_prefix("drm-") {
                 let value = value.trim_start();
+                if key == "client-id" {
+                    println!("  client-id: {}", value);
+                }
                 if let Some(key) = key.strip_prefix("total-") {
                     let mut parts = value.splitn(2, ' ');
                     let Ok(mut bytes) = parts.next().unwrap_or_default().parse::<u64>() else {

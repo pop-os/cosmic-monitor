@@ -1011,6 +1011,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "icu",
+ "libc",
  "libcosmic",
  "log",
  "open",
