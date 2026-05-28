@@ -3,6 +3,7 @@ use std::{collections::HashMap, fs, os::linux::fs::MetadataExt, path::Path};
 
 pub struct FdInfo {
     pub client_id: c_uint,
+    pub pdev: Option<String>,
     pub engines: Vec<(String, u64, f32)>,
     pub totals: Vec<(String, u64)>,
 }
@@ -40,6 +41,7 @@ impl FdInfo {
 
     pub fn new(data: &str) -> Option<Self> {
         let mut client_id = None;
+        let mut pdev = None;
         let mut totals = Vec::new();
         let mut engines = Vec::new();
         for line in data.lines() {
@@ -51,6 +53,8 @@ impl FdInfo {
                 let value = value.trim_start();
                 if key == "client-id" {
                     client_id = value.parse().ok();
+                } else if key == "pdev" {
+                    pdev = Some(value.to_string());
                 } else if let Some(key) = key.strip_prefix("engine-") {
                     if key.starts_with("capacity-") {
                         continue;
@@ -95,6 +99,7 @@ impl FdInfo {
 
         Some(Self {
             client_id: client_id?,
+            pdev,
             engines,
             totals,
         })

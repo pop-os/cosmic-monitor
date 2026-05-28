@@ -85,11 +85,32 @@ impl LinuxPlatform {
 }
 
 impl Platform for LinuxPlatform {
-    fn refresh_gpus(&mut self) {
-        self.nvml.refresh_gpus();
+    fn refresh(&mut self, refresh_processes: bool) {
+        self.nvml.refresh(refresh_processes);
+
+        // Refreshed first so total Intel GPU metrics can be calculated
+        if refresh_processes {
+            self.version += 1;
+            if let Ok(entries) = fs::read_dir("/proc") {
+                for entry_res in entries {
+                    let Ok(entry) = entry_res else { continue };
+                    let file_name = entry.file_name();
+                    let Some(pid_str) = file_name.to_str() else {
+                        continue;
+                    };
+                    let Ok(pid) = pid_str.parse::<Pid>() else {
+                        continue;
+                    };
+                    self.processes
+                        .entry(pid)
+                        .or_insert_with(|| LinuxProcess::new(pid, entry.path()))
+                        .update(self.version, &self.nvml)
+                }
+            }
+            self.processes.retain(|_k, v| v.version == self.version)
+        }
 
         self.gpu_items.clear();
-
         if let Ok(entries) = fs::read_dir("/sys/class/drm") {
             for entry_res in entries {
                 let Ok(entry) = entry_res else { continue };
@@ -148,23 +169,23 @@ impl Platform for LinuxPlatform {
                 let mut gpu_item = GpuItem {
                     bus_id,
                     name,
-                    usage: 0.0,
-                    vram_used: 0,
-                    vram_total: 0,
+                    usage: None,
+                    vram_used: None,
+                    vram_total: None,
                 };
 
                 //TODO: log errors
                 //TODO: gpu_busy_percent is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("gpu_busy_percent")) {
-                    gpu_item.usage = data.trim().parse().unwrap_or_default();
+                    gpu_item.usage = data.trim().parse().ok();
                 };
                 //TODO: mem_info_vram_used is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("mem_info_vram_used")) {
-                    gpu_item.vram_used = data.trim().parse().unwrap_or_default();
+                    gpu_item.vram_used = data.trim().parse().ok();
                 };
                 //TODO: mem_info_vram_total is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("mem_info_vram_total")) {
-                    gpu_item.vram_total = data.trim().parse().unwrap_or_default();
+                    gpu_item.vram_total = data.trim().parse().ok();
                 };
 
                 self.gpu_items.push(gpu_item)
@@ -182,33 +203,29 @@ impl Platform for LinuxPlatform {
             }
             self.gpu_items.push(nvml_gpu);
         }
+
+        // Fill in missing metrics using fdinfo totals
+        for gpu_item in self.gpu_items.iter_mut() {
+            let Some(bus_id) = &gpu_item.bus_id else {
+                continue;
+            };
+            if gpu_item.usage.is_none() {
+                for (_pid, process) in self.processes.iter() {
+                    for (_id, fdinfo) in process.fdinfos.iter() {
+                        if fdinfo.pdev.as_ref() == Some(bus_id) {
+                            for (_, _, usage) in fdinfo.engines.iter() {
+                                gpu_item.usage =
+                                    Some(gpu_item.usage.map_or(*usage, |x| x + *usage));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn gpus(&self) -> Vec<GpuItem> {
         self.gpu_items.clone()
-    }
-
-    fn refresh_processes(&mut self) {
-        self.nvml.refresh_processes();
-
-        self.version += 1;
-        if let Ok(entries) = fs::read_dir("/proc") {
-            for entry_res in entries {
-                let Ok(entry) = entry_res else { continue };
-                let file_name = entry.file_name();
-                let Some(pid_str) = file_name.to_str() else {
-                    continue;
-                };
-                let Ok(pid) = pid_str.parse::<Pid>() else {
-                    continue;
-                };
-                self.processes
-                    .entry(pid)
-                    .or_insert_with(|| LinuxProcess::new(pid, entry.path()))
-                    .update(self.version, &self.nvml)
-            }
-        }
-        self.processes.retain(|_k, v| v.version == self.version)
     }
 
     fn process_gpu_usage(&self, pid: Pid) -> Option<f32> {

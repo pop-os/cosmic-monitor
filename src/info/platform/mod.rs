@@ -8,14 +8,12 @@ mod linux;
 #[cfg(feature = "nvml")]
 mod nvml;
 
-pub trait Platform {
-    fn refresh_gpus(&mut self) {}
+pub trait Platform: Send + Sync {
+    fn refresh(&mut self, _refresh_processes: bool) {}
 
     fn gpus(&self) -> Vec<GpuItem> {
         Vec::new()
     }
-
-    fn refresh_processes(&mut self) {}
 
     fn process_gpu_usage(&self, _pid: Pid) -> Option<f32> {
         None

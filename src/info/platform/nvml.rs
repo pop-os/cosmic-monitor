@@ -21,16 +21,23 @@ impl NvmlPlatform {
         }
     }
 
-    fn refresh_gpus_inner(&mut self) -> Result<(), NvmlError> {
-        self.gpu_items.clear();
+    fn refresh_inner(&mut self, refresh_processes: bool) -> Result<(), NvmlError> {
         let Some(nvml) = &self.nvml else {
             return Ok(());
         };
+
+        self.gpu_items.clear();
+
+        if refresh_processes {
+            self.processes.clear();
+        }
+
         for index in 0..nvml.device_count()? {
             let device = nvml.device_by_index(index)?;
             let name = device.name()?;
             let memory_info = device.memory_info()?;
             let util = device.utilization_rates()?;
+
             self.gpu_items.push(GpuItem {
                 bus_id: device
                     .pci_info()
@@ -38,47 +45,35 @@ impl NvmlPlatform {
                     .map(|x| x.bus_id.replace("00000000:", "0000:"))
                     .ok(),
                 name,
-                usage: util.gpu as f32,
-                vram_used: memory_info.used,
-                vram_total: memory_info.total,
+                usage: Some(util.gpu as f32),
+                vram_used: Some(memory_info.used),
+                vram_total: Some(memory_info.total),
             });
-        }
-        Ok(())
-    }
 
-    fn refresh_processes_inner(&mut self) -> Result<(), NvmlError> {
-        self.processes.clear();
-        let Some(nvml) = &self.nvml else {
-            return Ok(());
-        };
-        for index in 0..nvml.device_count()? {
-            let device = nvml.device_by_index(index)?;
-            //TODO: last_seen_timestamp
-            for sample in device.process_utilization_stats(None)? {
-                let pid = Pid::from_u32(sample.pid);
-                self.processes
-                    .entry(pid)
-                    .or_insert_with(|| HashMap::new())
-                    .insert(index, sample);
+            if refresh_processes {
+                //TODO: last_seen_timestamp
+                for sample in device.process_utilization_stats(None)? {
+                    let pid = Pid::from_u32(sample.pid);
+                    self.processes
+                        .entry(pid)
+                        .or_insert_with(|| HashMap::new())
+                        .insert(index, sample);
+                }
             }
         }
+
         Ok(())
     }
 }
 
 impl Platform for NvmlPlatform {
-    fn refresh_gpus(&mut self) {
+    fn refresh(&mut self, processes: bool) {
         //TODO: log error?
-        let _ = self.refresh_gpus_inner();
+        let _ = self.refresh_inner(processes);
     }
 
     fn gpus(&self) -> Vec<GpuItem> {
         self.gpu_items.clone()
-    }
-
-    fn refresh_processes(&mut self) {
-        //TODO: log error?
-        let _ = self.refresh_processes_inner();
     }
 
     fn process_gpu_usage(&self, pid: Pid) -> Option<f32> {

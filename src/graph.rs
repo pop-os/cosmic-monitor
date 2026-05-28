@@ -296,14 +296,15 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 GraphKind::GpuUsage(gpu_name) => {
                     let mut total = 0.0;
                     for gpu in graph_item.gpus.iter().filter(|x| x.name == gpu_name) {
-                        total += gpu.usage as f32;
+                        total += gpu.usage.unwrap_or_default();
                     }
                     total
                 }
                 GraphKind::GpuVram(gpu_name) => {
                     let mut total = 0.0;
                     for gpu in graph_item.gpus.iter().filter(|x| x.name == gpu_name) {
-                        total += 100.0 * (gpu.vram_used as f32) / (gpu.vram_total as f32);
+                        total += 100.0 * (gpu.vram_used.unwrap_or_default() as f32)
+                            / (gpu.vram_total.unwrap_or_default() as f32);
                     }
                     total
                 }

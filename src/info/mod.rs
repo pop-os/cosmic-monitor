@@ -3,6 +3,7 @@ use cosmic::iced::{
     stream,
 };
 use std::{
+    sync::{Arc, RwLock},
     thread,
     time::{Duration, Instant},
 };
@@ -108,8 +109,11 @@ pub fn worker() -> impl Stream<Item = Message> {
         let processes_refresh = Duration::from_millis(3000);
         let graph_refresh = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
 
+        let platform_lock = Arc::new(RwLock::new(default_platform()));
+
         // Gather graph information
         {
+            let platform_lock = platform_lock.clone();
             let tx = tx.clone();
             thread::spawn(move || {
                 //TODO: use components
@@ -128,7 +132,6 @@ pub fn worker() -> impl Stream<Item = Message> {
                 let mut sys = System::new();
                 let mut disks = Disks::new();
                 let mut networks = Networks::new();
-                let mut platform = default_platform();
                 loop {
                     let time = Instant::now();
                     sys.refresh_specifics(
@@ -138,14 +141,27 @@ pub fn worker() -> impl Stream<Item = Message> {
                     );
                     disks.refresh(true);
                     networks.refresh(true);
-                    platform.refresh_gpus();
+                    {
+                        let mut platform = platform_lock.write().unwrap();
+                        platform.refresh(false);
+                    }
 
-                    let graph_item =
-                        GraphItem::new(time, &sys, &disks, &networks, &platform, graph_refresh);
                     if ignore > 0 {
                         ignore -= 1;
                     } else {
-                        match tx.blocking_send(Message::Graph(graph_item)) {
+                        let message = {
+                            let platform = platform_lock.read().unwrap();
+                            Message::Graph(GraphItem::new(
+                                time,
+                                &sys,
+                                &disks,
+                                &networks,
+                                &platform,
+                                graph_refresh,
+                            ))
+                        };
+
+                        match tx.blocking_send(message) {
                             Ok(()) => {}
                             Err(_) => break,
                         }
@@ -162,7 +178,6 @@ pub fn worker() -> impl Stream<Item = Message> {
             let mut sys = System::new();
             let mut disks = Disks::new();
             let mut networks = Networks::new();
-            let mut platform = default_platform();
             loop {
                 let time = Instant::now();
                 sys.refresh_specifics(
@@ -179,28 +194,34 @@ pub fn worker() -> impl Stream<Item = Message> {
                 );
                 disks.refresh(true);
                 networks.refresh(true);
-                platform.refresh_gpus();
-                platform.refresh_processes();
-
-                let graph_item =
-                    GraphItem::new(time, &sys, &disks, &networks, &platform, processes_refresh);
-
-                let processes = sys.processes();
-                let mut process_items = Vec::with_capacity(processes.len());
-                for (_pid, process) in processes.iter() {
-                    // Do not show threads
-                    if process.thread_kind().is_some() {
-                        continue;
-                    }
-                    process_items.push(ProcessItem::new(
-                        process,
-                        &platform,
-                        &users,
-                        processes_refresh,
-                    ));
+                {
+                    let mut platform = platform_lock.write().unwrap();
+                    platform.refresh(true);
                 }
 
-                match tx.blocking_send(Message::Snapshot(graph_item, process_items)) {
+                let message = {
+                    let platform = platform_lock.read().unwrap();
+                    let graph_item =
+                        GraphItem::new(time, &sys, &disks, &networks, &platform, processes_refresh);
+
+                    let processes = sys.processes();
+                    let mut process_items = Vec::with_capacity(processes.len());
+                    for (_pid, process) in processes.iter() {
+                        // Do not show threads
+                        if process.thread_kind().is_some() {
+                            continue;
+                        }
+                        process_items.push(ProcessItem::new(
+                            process,
+                            &platform,
+                            &users,
+                            processes_refresh,
+                        ));
+                    }
+                    Message::Snapshot(graph_item, process_items)
+                };
+
+                match tx.blocking_send(message) {
                     Ok(()) => {}
                     Err(_) => break,
                 }

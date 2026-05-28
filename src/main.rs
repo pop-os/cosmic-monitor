@@ -697,54 +697,64 @@ impl Application for App {
 
                 if let Some(graph_item) = &self.graph_snapshot {
                     for gpu in graph_item.gpus.iter() {
-                        column = column.push(
-                            widget::column!(
-                                widget::text::title4(&gpu.name),
+                        let mut gpu_col = widget::column::with_capacity(5).spacing(space_xxs);
+                        gpu_col = gpu_col.push(widget::text::title4(&gpu.name));
+                        if let Some(usage) = gpu.usage {
+                            gpu_col = gpu_col.push(
                                 widget::row!(widget::column!(
                                     widget::text::body(fl!("utilization")),
-                                    widget::text::heading(format!("{:.1}%", gpu.usage))
+                                    widget::text::heading(format!("{:.1}%", usage))
                                 ),)
                                 .spacing(space_m),
+                            );
+                            gpu_col = gpu_col.push(
                                 canvas(Graph::new(
                                     GraphKind::GpuUsage(&gpu.name),
-                                    &self.graph_history
+                                    &self.graph_history,
                                 ))
                                 .height(300.0)
                                 .width(Length::Fill),
-                                widget::row!(
-                                    widget::column!(
-                                        widget::text::body(fl!("capacity")),
-                                        widget::text::heading(
-                                            humansize::format_size(
-                                                gpu.vram_total,
-                                                humansize::BINARY
+                            );
+                        }
+                        if let Some(vram_used) = gpu.vram_used {
+                            if let Some(vram_total) = gpu.vram_total {
+                                gpu_col = gpu_col.push(
+                                    widget::row!(
+                                        widget::column!(
+                                            widget::text::body(fl!("capacity")),
+                                            widget::text::heading(
+                                                humansize::format_size(
+                                                    vram_total,
+                                                    humansize::BINARY
+                                                )
+                                                .to_string()
                                             )
-                                            .to_string()
-                                        )
-                                    ),
-                                    widget::column!(
-                                        widget::text::body(fl!("vram")),
-                                        widget::text::heading(format!(
-                                            "{} ({:.1}%)",
-                                            humansize::format_size(
-                                                gpu.vram_used,
-                                                humansize::BINARY
-                                            ),
-                                            100.0 * (gpu.vram_used as f64)
-                                                / (gpu.vram_total as f64)
-                                        ))
-                                    ),
-                                )
-                                .spacing(space_m),
-                                canvas(Graph::new(
-                                    GraphKind::GpuVram(&gpu.name),
-                                    &self.graph_history
-                                ))
-                                .height(300.0)
-                                .width(Length::Fill),
-                            )
-                            .spacing(space_xxs),
-                        );
+                                        ),
+                                        widget::column!(
+                                            widget::text::body(fl!("vram")),
+                                            widget::text::heading(format!(
+                                                "{} ({:.1}%)",
+                                                humansize::format_size(
+                                                    vram_used,
+                                                    humansize::BINARY
+                                                ),
+                                                100.0 * (vram_used as f64) / (vram_total as f64)
+                                            ))
+                                        ),
+                                    )
+                                    .spacing(space_m),
+                                );
+                                gpu_col = gpu_col.push(
+                                    canvas(Graph::new(
+                                        GraphKind::GpuVram(&gpu.name),
+                                        &self.graph_history,
+                                    ))
+                                    .height(300.0)
+                                    .width(Length::Fill),
+                                );
+                            }
+                        }
+                        column = column.push(gpu_col);
                     }
                 } else {
                     column = column.push(widget::indeterminate_circular());
