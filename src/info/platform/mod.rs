@@ -3,6 +3,9 @@ use sysinfo::Pid;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(feature = "nvml")]
+mod nvml;
+
 pub trait Platform {
     fn refresh_processes(&mut self) {}
 
@@ -11,15 +14,14 @@ pub trait Platform {
     }
 }
 
-#[derive(Default)]
 pub struct FallbackPlatform;
 
 impl Platform for FallbackPlatform {}
 
 pub fn default_platform() -> Box<dyn Platform> {
     #[cfg(target_os = "linux")]
-    return Box::new(linux::LinuxPlatform::default());
+    return Box::new(linux::LinuxPlatform::new());
 
     #[allow(unreachable_code)]
-    Box::new(FallbackPlatform::default())
+    Box::new(FallbackPlatform)
 }

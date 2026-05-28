@@ -15,28 +15,30 @@ mod fdinfo;
 struct LinuxProcess {
     fdinfos: HashMap<(c_uint, c_uint), FdInfo>,
     gpu_usage: Option<f32>,
+    pid: Pid,
     proc_path: PathBuf,
     time: Instant,
     version: u64,
 }
 
 impl LinuxProcess {
-    fn new(proc_path: PathBuf) -> Self {
+    fn new(pid: Pid, proc_path: PathBuf) -> Self {
         Self {
             fdinfos: HashMap::new(),
             gpu_usage: None,
+            pid,
             proc_path,
             time: Instant::now(),
             version: 0,
         }
     }
 
-    fn update(&mut self, version: u64) {
+    fn update(&mut self, version: u64, nvml: &Box<dyn Platform>) {
         let time = Instant::now();
         let mut fdinfos = FdInfo::for_proc_path(&self.proc_path);
         let duration = time.saturating_duration_since(self.time).as_secs_f32();
 
-        self.gpu_usage = None;
+        self.gpu_usage = nvml.process_gpu_usage(self.pid);
         for (id, fdinfo) in fdinfos.iter_mut() {
             if let Some(last_fdinfo) = self.fdinfos.get(id) {
                 for (name, nanos, usage) in fdinfo.engines.iter_mut() {
@@ -60,14 +62,29 @@ impl LinuxProcess {
     }
 }
 
-#[derive(Default)]
 pub struct LinuxPlatform {
-    version: u64,
+    nvml: Box<dyn Platform>,
     processes: HashMap<Pid, LinuxProcess>,
+    version: u64,
+}
+
+impl LinuxPlatform {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(feature = "nvml")]
+            nvml: Box::new(super::nvml::NvmlPlatform::new()),
+            #[cfg(not(feature = "nvml"))]
+            nvml: Box::new(super::FallbackPlatform),
+            processes: HashMap::new(),
+            version: 0,
+        }
+    }
 }
 
 impl Platform for LinuxPlatform {
     fn refresh_processes(&mut self) {
+        self.nvml.refresh_processes();
+
         self.version += 1;
         if let Ok(entries) = fs::read_dir("/proc") {
             for entry_res in entries {
@@ -81,8 +98,8 @@ impl Platform for LinuxPlatform {
                 };
                 self.processes
                     .entry(pid)
-                    .or_insert_with(|| LinuxProcess::new(entry.path()))
-                    .update(self.version)
+                    .or_insert_with(|| LinuxProcess::new(pid, entry.path()))
+                    .update(self.version, &self.nvml)
             }
         }
         self.processes.retain(|_k, v| v.version == self.version)
