@@ -2,15 +2,17 @@ use sysinfo::Cpu;
 
 #[derive(Clone, Debug)]
 pub struct CpuItem {
+    pub brand: String,
     pub name: String,
-    pub cpu_usage: f32,
+    pub usage: f32,
 }
 
 impl CpuItem {
     pub fn new(cpu: &Cpu) -> Self {
         Self {
+            brand: cpu.brand().into(),
             name: cpu.name().into(),
-            cpu_usage: cpu.cpu_usage(),
+            usage: cpu.cpu_usage(),
         }
     }
 }

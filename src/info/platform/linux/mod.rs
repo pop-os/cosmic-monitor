@@ -127,10 +127,10 @@ impl Platform for LinuxPlatform {
                 let drm_path = entry.path();
                 let device_path = drm_path.join("device");
 
-                let mut bus_id = None;
+                let mut bus_id_opt = None;
                 if let Ok(link_path) = fs::read_link(&device_path) {
                     if let Some(link_name) = link_path.file_name() {
-                        bus_id = Some(link_name.to_string_lossy().into());
+                        bus_id_opt = Some(link_name.to_string_lossy().into());
                     }
                 }
 
@@ -167,7 +167,7 @@ impl Platform for LinuxPlatform {
                 };
 
                 let mut gpu_item = GpuItem {
-                    bus_id,
+                    bus_id: bus_id_opt.unwrap_or_else(|| format!("card{}", id)),
                     name,
                     usage: None,
                     vram_used: None,
@@ -193,12 +193,10 @@ impl Platform for LinuxPlatform {
         }
 
         'nvml_gpus: for nvml_gpu in self.nvml.gpus() {
-            if let Some(nvml_bus_id) = &nvml_gpu.bus_id {
-                for gpu in self.gpu_items.iter_mut() {
-                    if gpu.bus_id.as_ref() == Some(nvml_bus_id) {
-                        *gpu = nvml_gpu;
-                        continue 'nvml_gpus;
-                    }
+            for gpu in self.gpu_items.iter_mut() {
+                if gpu.bus_id == nvml_gpu.bus_id {
+                    *gpu = nvml_gpu;
+                    continue 'nvml_gpus;
                 }
             }
             self.gpu_items.push(nvml_gpu);
@@ -206,13 +204,10 @@ impl Platform for LinuxPlatform {
 
         // Fill in missing metrics using fdinfo totals
         for gpu_item in self.gpu_items.iter_mut() {
-            let Some(bus_id) = &gpu_item.bus_id else {
-                continue;
-            };
             if gpu_item.usage.is_none() {
                 for (_pid, process) in self.processes.iter() {
                     for (_id, fdinfo) in process.fdinfos.iter() {
-                        if fdinfo.pdev.as_ref() == Some(bus_id) {
+                        if fdinfo.pdev.as_ref() == Some(&gpu_item.bus_id) {
                             for (_, _, usage) in fdinfo.engines.iter() {
                                 gpu_item.usage =
                                     Some(gpu_item.usage.map_or(*usage, |x| x + *usage));

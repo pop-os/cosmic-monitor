@@ -95,9 +95,27 @@ impl GraphItem {
     pub fn total_cpu_usage(&self) -> f32 {
         let mut total = 0.0;
         for cpu in self.cpus.iter() {
-            total += cpu.cpu_usage;
+            total += cpu.usage;
         }
         total / (self.cpus.len() as f32)
+    }
+
+    pub fn total_disk_io(&self) -> (f64, f64) {
+        let mut total = (0.0, 0.0);
+        for disk in self.disks.iter() {
+            total.0 += disk.read;
+            total.1 += disk.write;
+        }
+        total
+    }
+
+    pub fn total_network_io(&self) -> (f64, f64) {
+        let mut total = (0.0, 0.0);
+        for network in self.networks.iter() {
+            total.0 += network.rx;
+            total.1 += network.tx;
+        }
+        total
     }
 }
 

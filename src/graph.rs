@@ -12,22 +12,42 @@ pub enum GraphKind<'a> {
     Cpu,
     Memory,
     Swap,
+    //TODO: GPU name may not be unique, use bus_id or something else
     GpuUsage(&'a str),
     GpuVram(&'a str),
     DiskRead(&'a str),
     DiskWrite(&'a str),
+    DiskTotal,
     NetworkRx(&'a str),
     NetworkTx(&'a str),
+    NetworkTotal,
 }
 
 pub struct Graph<'a> {
     pub kind: GraphKind<'a>,
     pub history: &'a VecDeque<GraphItem>,
+    pub border: bool,
+    pub legend: bool,
 }
 
 impl<'a> Graph<'a> {
     pub fn new(kind: GraphKind<'a>, history: &'a VecDeque<GraphItem>) -> Self {
-        Self { kind, history }
+        Self {
+            kind,
+            history,
+            border: false,
+            legend: false,
+        }
+    }
+
+    pub fn border(mut self) -> Self {
+        self.border = true;
+        self
+    }
+
+    pub fn legend(mut self) -> Self {
+        self.legend = true;
+        self
     }
 }
 
@@ -47,12 +67,19 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         let mut accent_color_0_5 = accent_color.clone();
         accent_color_0_5.a *= 0.5;
         let bg_component_color = Color::from(cosmic.bg_component_color());
+        let bg_component_divider = Color::from(cosmic.bg_component_divider());
         let on_bg_color = Color::from(cosmic.on_bg_color());
         //TODO: design has radius_s but Canvas does not support clipping with border radius
         //let bg_radius = cosmic.radius_s();
         let bg_radius = cosmic.radius_0();
 
-        let calc_x = |time: f32| -> f32 { (1.0 - time / 60.0) * (bounds.width - 80.0) };
+        let (legend_w, legend_h) = if self.legend {
+            (80.0, 20.0)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let calc_x = |time: f32| -> f32 { (1.0 - time / 60.0) * (bounds.width - legend_w) };
         let scale_y = match self.kind {
             GraphKind::Cpu
             | GraphKind::Memory
@@ -74,6 +101,14 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                     for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
                         max = disk.write.max(max);
                     }
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
+            GraphKind::DiskTotal => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    let disk_io = graph_item.total_disk_io();
+                    max = (disk_io.0 + disk_io.1).max(max);
                 }
                 10.0f32.powf(max.log10().ceil().max(3.0) as f32)
             }
@@ -103,6 +138,14 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 }
                 10.0f32.powf(max.log10().ceil().max(3.0) as f32)
             }
+            GraphKind::NetworkTotal => {
+                let mut max = 0.0;
+                for graph_item in self.history.iter() {
+                    let network_io = graph_item.total_network_io();
+                    max = (network_io.0 + network_io.1).max(max);
+                }
+                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+            }
         };
 
         // NaN or +/- infinity would be nonsensical on a chart, so replace with zero
@@ -110,7 +153,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
             if value.is_finite() { value } else { 0.0 }
         }
         let calc_y = |value: f32| -> f32 {
-            (1.0 - invalid_is_zero(value / scale_y)) * (bounds.height - 20.0)
+            (1.0 - invalid_is_zero(value / scale_y)) * (bounds.height - legend_h)
         };
 
         let min_x = calc_x(60.0);
@@ -126,12 +169,14 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                     align_x: Alignment,
                     align_y: Vertical,
                     frame: &mut canvas::Frame| {
-            let mut text = canvas::Text::from(string);
-            text.position = position;
-            text.color = on_bg_color;
-            text.align_x = align_x;
-            text.align_y = align_y;
-            frame.fill_text(text);
+            if self.legend {
+                let mut text = canvas::Text::from(string);
+                text.position = position;
+                text.color = on_bg_color;
+                text.align_x = align_x;
+                text.align_y = align_y;
+                frame.fill_text(text);
+            }
         };
 
         // Draw background
@@ -141,7 +186,13 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 Size::new(max_x - min_x, max_y - min_y),
                 bg_radius.into(),
             );
-            frame.fill(&path, bg_component_color)
+            frame.fill(&path, bg_component_color);
+            if self.border {
+                frame.stroke(
+                    &path,
+                    canvas::Stroke::default().with_color(bg_component_divider),
+                );
+            }
         }
 
         // Draw X axis info
@@ -224,8 +275,10 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
             }
             GraphKind::DiskRead(_)
             | GraphKind::DiskWrite(_)
+            | GraphKind::DiskTotal
             | GraphKind::NetworkRx(_)
-            | GraphKind::NetworkTx(_) => {
+            | GraphKind::NetworkTx(_)
+            | GraphKind::NetworkTotal => {
                 //TODO: automatic Y scale for these graphs
                 text(
                     "0 B/s",
@@ -293,16 +346,16 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                     100.0 * (graph_item.memory.swap_used as f32)
                         / (graph_item.memory.swap_total as f32)
                 }
-                GraphKind::GpuUsage(gpu_name) => {
+                GraphKind::GpuUsage(gpu_bus_id) => {
                     let mut total = 0.0;
-                    for gpu in graph_item.gpus.iter().filter(|x| x.name == gpu_name) {
+                    for gpu in graph_item.gpus.iter().filter(|x| x.bus_id == gpu_bus_id) {
                         total += gpu.usage.unwrap_or_default();
                     }
                     total
                 }
-                GraphKind::GpuVram(gpu_name) => {
+                GraphKind::GpuVram(gpu_bus_id) => {
                     let mut total = 0.0;
-                    for gpu in graph_item.gpus.iter().filter(|x| x.name == gpu_name) {
+                    for gpu in graph_item.gpus.iter().filter(|x| x.bus_id == gpu_bus_id) {
                         total += 100.0 * (gpu.vram_used.unwrap_or_default() as f32)
                             / (gpu.vram_total.unwrap_or_default() as f32);
                     }
@@ -321,6 +374,10 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                         total += disk.write as f32;
                     }
                     total
+                }
+                GraphKind::DiskTotal => {
+                    let disk_io = graph_item.total_disk_io();
+                    (disk_io.0 + disk_io.1) as f32
                 }
                 GraphKind::NetworkRx(network_name) => {
                     let mut total = 0.0;
@@ -343,6 +400,10 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                         total += network.tx as f32;
                     }
                     total
+                }
+                GraphKind::NetworkTotal => {
+                    let network_io = graph_item.total_network_io();
+                    (network_io.0 + network_io.1) as f32
                 }
             };
             let y = calc_y(value);
