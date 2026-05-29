@@ -553,6 +553,44 @@ impl Application for App {
                                 .push(row)
                                 .push(widget::divider::horizontal::default());
                         }
+                    } else if matches!(graph_kind, GraphKind::NetworkTotal) {
+                        if let Some((name, io)) = graph_item
+                            .networks
+                            .iter()
+                            .map(|x| (x.name.as_str(), (x.rx + x.tx) as u64))
+                            .max_by(|a, b| a.1.cmp(&b.1))
+                        {
+                            let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
+                            row = row
+                                .push(
+                                    widget::container(
+                                        widget::text(name)
+                                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(
+                                                1,
+                                            )))
+                                            .shaping(Shaping::Basic),
+                                    )
+                                    .align_x(Alignment::Start)
+                                    .align_y(Alignment::Center)
+                                    .width(Length::Fill),
+                                )
+                                .push(
+                                    widget::container(
+                                        widget::text(format!(
+                                            "{}/s",
+                                            humansize::format_size(io, humansize::DECIMAL)
+                                        ))
+                                        .shaping(Shaping::Basic),
+                                    )
+                                    .align_x(Alignment::End)
+                                    .align_y(Alignment::Center)
+                                    .width(Length::Shrink),
+                                );
+                            column = column
+                                .push(widget::divider::horizontal::default())
+                                .push(row)
+                                .push(widget::divider::horizontal::default());
+                        }
                     }
 
                     column = column.push(
