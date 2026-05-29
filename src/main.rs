@@ -500,6 +500,17 @@ impl Application for App {
             .nav_model
             .active_data()
             .map_or(NavPage::Dashboard, |x| *x);
+        let mut page_header = widget::column::with_capacity(4).padding([0, space_xl]);
+        if !matches!(nav_page, NavPage::Dashboard) {
+            page_header = page_header.push(
+                widget::button::text(fl!("dashboard"))
+                    .leading_icon(widget::icon::from_name("go-previous-symbolic"))
+                    .on_press(Message::NavPage(NavPage::Dashboard)),
+            );
+        }
+        page_header = page_header
+            .push(widget::column!(widget::text::title2(nav_page.title())))
+            .push(widget::space().height(space_m));
         let content: Element<Message> = match (nav_page, &self.graph_snapshot) {
             (NavPage::Dashboard, Some(graph_item)) => {
                 let card = |graph_kind,
@@ -717,37 +728,30 @@ impl Application for App {
                     header = header
                         .push(widget::mouse_area(row).on_press(Message::ProcessSort(category)));
                 }
-                widget::column::with_capacity(2)
-                    .push(header)
-                    .push(iced::widget::List::new(
-                        &self.process_content,
-                        move |_i, item| {
-                            let mut row = widget::row::with_capacity(categories.len())
-                                .align_y(Alignment::Center);
-                            for &category in categories {
-                                row = row.push(
-                                    widget::container(
-                                        widget::text(item.text(category))
-                                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(
-                                                1,
-                                            )))
-                                            .shaping(Shaping::Basic),
-                                    )
-                                    .align_x(category.data_align())
-                                    .align_y(Alignment::Center)
-                                    .padding([0, 8])
-                                    .height(Length::Fixed(40.0))
-                                    .width(category.width()),
-                                );
-                            }
-                            widget::column::with_capacity(2)
-                                .push(widget::divider::horizontal::default())
-                                .push(row)
-                                .into()
-                        },
-                    ))
-                    .width(Length::Fill)
-                    .into()
+                page_header = page_header.push(header);
+                iced::widget::List::new(&self.process_content, move |_i, item| {
+                    let mut row =
+                        widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
+                    for &category in categories {
+                        row = row.push(
+                            widget::container(
+                                widget::text(item.text(category))
+                                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                                    .shaping(Shaping::Basic),
+                            )
+                            .align_x(category.data_align())
+                            .align_y(Alignment::Center)
+                            .padding([0, 8])
+                            .height(Length::Fixed(40.0))
+                            .width(category.width()),
+                        );
+                    }
+                    widget::column::with_capacity(2)
+                        .push(widget::divider::horizontal::default())
+                        .push(row)
+                        .into()
+                })
+                .into()
             }
             (NavPage::Cpu, Some(graph_item)) => {
                 let mut column = widget::column::with_capacity(2)
@@ -1025,22 +1029,14 @@ impl Application for App {
             }
             _ => widget::indeterminate_circular().into(),
         };
-        widget::scrollable(
-            widget::column::with_capacity(2)
-                .padding([0, space_xl])
-                .spacing(space_m)
-                .width(Length::Fill)
-                .push(if matches!(nav_page, NavPage::Dashboard) {
-                    widget::column!(widget::text::title2(nav_page.title()))
-                } else {
-                    widget::column!(
-                        widget::button::text(fl!("dashboard"))
-                            .leading_icon(widget::icon::from_name("go-previous-symbolic"))
-                            .on_press(Message::NavPage(NavPage::Dashboard)),
-                        widget::text::title2(nav_page.title())
-                    )
-                })
-                .push(content),
+        widget::column!(
+            page_header,
+            widget::scrollable(
+                widget::container(content)
+                    .padding([0, space_xl])
+                    .width(Length::Fill)
+            )
+            .width(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)
