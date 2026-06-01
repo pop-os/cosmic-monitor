@@ -289,13 +289,23 @@ impl App {
         sort_category: ProcessCategory,
         count: usize,
     ) -> Element<'a, Message> {
+        let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+
         //TODO: do not duplicate code to create process table
         let categories = &[
             ProcessCategory::Name,
             ProcessCategory::CPU,
             ProcessCategory::Memory,
-            ProcessCategory::GpuUsageTotal,
-            ProcessCategory::GpuVramTotal,
+            if let ProcessCategory::GpuUsage(..) = sort_category {
+                sort_category
+            } else {
+                ProcessCategory::GpuUsageTotal
+            },
+            if let ProcessCategory::GpuVram(..) = sort_category {
+                sort_category
+            } else {
+                ProcessCategory::GpuVramTotal
+            },
             ProcessCategory::DiskTotal,
         ];
         let mut column = widget::column::with_capacity(count + 2);
@@ -339,15 +349,16 @@ impl App {
                     .push(row),
             );
         }
-        column = column.push(
-            widget::column::with_capacity(2)
-                .push(widget::divider::horizontal::default())
-                .push(
-                    widget::button::text(fl!("see-all-processes"))
-                        .on_press(Message::SeeAllProcesses(sort_category, false)),
-                ),
-        );
-        column.into()
+        column = column.push(widget::divider::horizontal::default());
+        widget::column!(
+            widget::text::title4(fl!("processes")),
+            column,
+            widget::button::text(fl!("see-all-processes"))
+                .trailing_icon(widget::icon::from_name("go-next-symbolic"))
+                .on_press(Message::SeeAllProcesses(sort_category, false)),
+        )
+        .spacing(space_xxs)
+        .into()
     }
 
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
@@ -930,13 +941,7 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("processes")),
-                        self.top_processes_by(ProcessCategory::CPU, 5)
-                    )
-                    .spacing(space_xxs),
-                );
+                column = column.push(self.top_processes_by(ProcessCategory::CPU, 5));
 
                 // Utilization per core
                 let mut children = Vec::with_capacity(graph_item.cpus.len());
@@ -1030,6 +1035,9 @@ impl Application for App {
                     .spacing(space_xxs),
                 );
 
+                // Top processes
+                column = column.push(self.top_processes_by(ProcessCategory::Memory, 5));
+
                 // Swap information
                 column = column.push(
                     widget::column!(
@@ -1059,15 +1067,6 @@ impl Application for App {
                     .spacing(space_xxs),
                 );
 
-                // Top processes
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("processes")),
-                        self.top_processes_by(ProcessCategory::Memory, 5)
-                    )
-                    .spacing(space_xxs),
-                );
-
                 column.into()
             }
             (NavPage::Gpu, Some(graph_item)) => {
@@ -1076,7 +1075,7 @@ impl Application for App {
                     .width(Length::Fill);
 
                 for gpu in graph_item.gpus.iter() {
-                    let mut gpu_col = widget::column::with_capacity(5).spacing(space_xxs);
+                    let mut gpu_col = widget::column::with_capacity(7).spacing(space_xxs);
                     gpu_col = gpu_col.push(widget::text::title4(&gpu.name));
                     if let Some(usage) = gpu.usage {
                         gpu_col = gpu_col.push(
@@ -1103,6 +1102,10 @@ impl Application for App {
                             .height(300.0)
                             .width(Length::Fill),
                         );
+
+                        // Top processes
+                        gpu_col = gpu_col
+                            .push(self.top_processes_by(ProcessCategory::GpuUsage(gpu.id), 5));
                     }
                     if let Some(vram_used) = gpu.vram_used {
                         if let Some(vram_total) = gpu.vram_total {
@@ -1134,6 +1137,10 @@ impl Application for App {
                                 .height(300.0)
                                 .width(Length::Fill),
                             );
+
+                            // Top processes
+                            gpu_col = gpu_col
+                                .push(self.top_processes_by(ProcessCategory::GpuVram(gpu.id), 5));
                         }
                     }
                     column = column.push(gpu_col);
