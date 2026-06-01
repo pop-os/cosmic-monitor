@@ -103,6 +103,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn format_frequency(mhz: u64) -> String {
+    if mhz >= 1000 {
+        format!("{:.2} GHz", (mhz as f64) / 1000.0)
+    } else {
+        format!("{} MHz", mhz)
+    }
+}
+
 fn print_help() {
     println!(
         r#"COSMIC System Monitor
@@ -389,16 +397,16 @@ impl App {
             fl!("cpu"),
             if let Some(temp) = graph_item.max_cpu_temp() {
                 format!(
-                    "{:.1}% / {} MHz / {:.1}°C",
+                    "{:.1}% / {} / {:.1}°C",
                     graph_item.total_cpu_usage(),
-                    graph_item.max_cpu_frequency(),
+                    format_frequency(graph_item.max_cpu_frequency()),
                     temp
                 )
             } else {
                 format!(
-                    "{:.1}% / {} MHz",
+                    "{:.1}% / {}",
                     graph_item.total_cpu_usage(),
-                    graph_item.max_cpu_frequency()
+                    format_frequency(graph_item.max_cpu_frequency())
                 )
             },
             graph_item
@@ -541,6 +549,7 @@ impl Application for App {
     /// Creates the application, and optionally emits command on initialize.
     fn init(mut core: Core, flags: Self::Flags) -> (Self, Task<Self::Message>) {
         core.window.context_is_overlay = false;
+        core.nav_bar_set_toggled(false);
 
         let app_themes = vec![fl!("match-desktop"), fl!("dark"), fl!("light")];
 
@@ -731,7 +740,6 @@ impl Application for App {
         let cosmic_theme::Spacing {
             space_xl,
             space_m,
-            space_s,
             space_xs,
             space_xxs,
             ..
@@ -743,15 +751,15 @@ impl Application for App {
             .map_or(NavPage::Dashboard, |x| *x);
         let mut page_header = widget::column::with_capacity(4).padding([0, space_xl]);
         if !matches!(nav_page, NavPage::Dashboard) {
-            page_header = page_header.push(
-                widget::button::text(fl!("dashboard"))
-                    .leading_icon(widget::icon::from_name("go-previous-symbolic"))
-                    .on_press(Message::NavPage(NavPage::Dashboard)),
-            );
+            page_header = page_header
+                .push(
+                    widget::button::text(fl!("dashboard"))
+                        .leading_icon(widget::icon::from_name("go-previous-symbolic"))
+                        .on_press(Message::NavPage(NavPage::Dashboard)),
+                )
+                .push(widget::column!(widget::text::title2(nav_page.title())))
+                .push(widget::space().height(space_m));
         }
-        page_header = page_header
-            .push(widget::column!(widget::text::title2(nav_page.title())))
-            .push(widget::space().height(space_m));
         let content: Element<Message> = match (nav_page, &self.graph_snapshot) {
             (NavPage::Dashboard, Some(graph_item)) => {
                 widget::responsive(|size| self.view_dashboard(graph_item, size))
@@ -827,8 +835,7 @@ impl Application for App {
                             ),
                             widget::column!(
                                 widget::text::body(fl!("speed")),
-                                widget::text::heading(format!(
-                                    "{} MHz",
+                                widget::text::heading(format_frequency(
                                     graph_item.max_cpu_frequency()
                                 ))
                             ),
@@ -852,24 +859,33 @@ impl Application for App {
                 // Utilization per core
                 let mut children = Vec::with_capacity(graph_item.cpus.len());
                 for cpu in graph_item.cpus.iter() {
-                    let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
-                    row = row.push(
-                        widget::determinate_linear(cpu.usage / 100.0)
-                            .girth(12.0)
-                            .width(240.0),
+                    children.push(
+                        widget::column!(
+                            widget::row!(
+                                widget::text::heading(&cpu.name),
+                                widget::space().width(Length::Fill),
+                                widget::text::body(format_frequency(cpu.frequency))
+                                    .align_x(Alignment::End),
+                            )
+                            .width(200.0 + 48.0),
+                            widget::row!(
+                                widget::determinate_linear(cpu.usage / 100.0)
+                                    .girth(12.0)
+                                    .width(200.0),
+                                widget::text(format!("{:.1}%", cpu.usage))
+                                    .align_x(Alignment::End)
+                                    .width(48.0),
+                            )
+                            .align_y(Alignment::Center)
+                        )
+                        .into(),
                     );
-                    row = row.push(
-                        widget::text(format!("{:.1}%", cpu.usage))
-                            .align_x(Alignment::End)
-                            .width(48.0),
-                    );
-                    children.push(widget::column!(widget::text::heading(&cpu.name), row).into());
                 }
                 column = column.push(
                     widget::column!(
                         widget::text::title4(fl!("utilization-per-core")),
                         widget::flex_row(children)
-                            .column_spacing(space_s)
+                            .column_spacing(space_m)
                             .row_spacing(space_xs)
                     )
                     .spacing(space_xxs),
@@ -900,17 +916,25 @@ impl Application for App {
                                 widget::text::body(fl!("in-use")),
                                 widget::text::heading(format!(
                                     "{} ({:.1}%)",
-                                    humansize::format_size(mem.used, humansize::BINARY),
-                                    100.0 * (mem.used as f64) / (mem.total as f64)
+                                    humansize::format_size(mem.used - mem.cache, humansize::BINARY),
+                                    100.0 * ((mem.used - mem.cache) as f64) / (mem.total as f64)
                                 ))
                             ),
                             widget::column!(
                                 widget::text::body(fl!("cache")),
-                                widget::text::heading("TODO")
+                                widget::text::heading(format!(
+                                    "{} ({:.1}%)",
+                                    humansize::format_size(mem.cache, humansize::BINARY),
+                                    100.0 * (mem.cache as f64) / (mem.total as f64)
+                                ))
                             ),
                             widget::column!(
                                 widget::text::body(fl!("total-utilization")),
-                                widget::text::heading("TODO")
+                                widget::text::heading(format!(
+                                    "{} ({:.1}%)",
+                                    humansize::format_size(mem.used, humansize::BINARY),
+                                    100.0 * (mem.used as f64) / (mem.total as f64)
+                                ))
                             ),
                         )
                         .spacing(space_m),

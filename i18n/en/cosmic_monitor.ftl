@@ -16,18 +16,18 @@ details = Details
 gpu-vram = GPU VRAM
 
 ## CPU
-overall-utilization = Overall Utilization
+overall-utilization = Overall utilization
 speed = Speed
 temperature = Temperature
 utilization = Utilization
-utilization-per-core = Utilization per Core
+utilization-per-core = Utilization per core
 
 ## Memory
 cache = Cache
 capacity = Capacity
 in-use = In use
-memory-usage = Memory Usage
-swap-usage = Swap Usage
+memory-usage = Memory usage
+swap-usage = Swap usage
 total-utilization = Total utilization
 
 ## GPU
