@@ -1207,6 +1207,10 @@ impl Application for App {
                             widget::text::title4(&disk.name),
                             widget::row!(
                                 widget::column!(
+                                    widget::text::body(fl!("mount-path")),
+                                    widget::text::heading(&disk.mount_path)
+                                ),
+                                widget::column!(
                                     widget::text::body(fl!("capacity")),
                                     widget::text::heading(
                                         humansize::format_size(disk.total, humansize::BINARY)

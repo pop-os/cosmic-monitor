@@ -36,6 +36,7 @@ vram = VRAM
 
 ## Disk
 all-disks = All disks
+mount-path = Mount path
 reading = Reading
 writing = Writing
 
