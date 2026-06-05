@@ -437,6 +437,7 @@ impl App {
 
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
+            space_xl,
             space_s,
             space_xs,
             space_xxs,
@@ -663,11 +664,18 @@ impl App {
 
         let mut cols = 1;
         let min_width = 440.0;
-        while cols < 4 && size.width / ((cols + 1) as f32) > min_width {
+        let min_processes_width = 720.0;
+        let content_width = size.width - (space_xl * 2) as f32;
+        let (graphs_width, side_by_side) = if content_width > min_processes_width * 2.0 {
+            (content_width - min_processes_width, true)
+        } else {
+            (content_width, false)
+        };
+        while cols < 4 && graphs_width / ((cols + 1) as f32) > min_width {
             cols += 1;
         }
-        let mut column =
-            widget::column::with_capacity(((items.len() + cols - 1) / cols) + 1).spacing(space_s);
+        let rows = (items.len() + cols - 1) / cols;
+        let mut column = widget::column::with_capacity(rows).spacing(space_s);
 
         // Graphs
         let mut row = widget::row::with_capacity(cols).spacing(space_s);
@@ -690,25 +698,84 @@ impl App {
         }
 
         // Top apps/processes
-        for &show_apps in &[true, false] {
-            column = column.push(
+        let mut list_cards = Vec::with_capacity(2);
+        let mut app_count = 5;
+        let mut proc_count = 5;
+        if side_by_side {
+            let card_height = (space_s + 176 + space_s) as f32;
+            let rows_height =
+                rows as f32 * card_height + (space_s as f32) * rows.saturating_sub(1) as f32;
+            while app_count < 20 && proc_count < 20 {
+                let list_height = |list_count: u16| -> f32 {
+                    (space_s
+                    + 30 /* title 4 */
+                    + space_s
+                    + 24 /* header */ + 1 /* divider */
+                    + ((40 + 1) * list_count) /* items */
+                    + space_s
+                    + 32 /* button */
+                    + space_s) as f32
+                };
+                let (next_app_count, next_proc_count) = if app_count < proc_count {
+                    (app_count + 1, proc_count)
+                } else {
+                    (app_count, proc_count + 1)
+                };
+                if list_height(next_app_count) + (space_s as f32) + list_height(next_proc_count)
+                    > rows_height.max(size.height)
+                {
+                    break;
+                }
+                app_count = next_app_count;
+                proc_count = next_proc_count;
+            }
+        }
+        for &(show_apps, list_count) in &[(true, app_count), (false, proc_count)] {
+            list_cards.push(Element::from(
                 widget::container(
                     widget::column!(self.top_processes_by(
                         show_apps,
                         self.process_sort.0,
                         self.process_sort.1,
                         true,
-                        5,
+                        list_count as usize,
                     ))
                     .spacing(space_s),
                 )
                 .class(theme::Container::Card)
                 .padding(space_s)
                 .width(Length::Fill),
-            );
+            ));
         }
 
-        column.into()
+        let content: Element<Message> = if side_by_side {
+            // Top apps/processes as column next to graphs
+            widget::row!(
+                widget::column::with_children(list_cards)
+                    .spacing(space_s)
+                    .width(Length::Fixed(min_processes_width)),
+                column
+            )
+            .spacing(space_s)
+            .into()
+        } else {
+            // Top apps/processes as column above graphs
+            widget::column!(
+                widget::column::with_children(list_cards).spacing(space_s),
+                column
+            )
+            .spacing(space_s)
+            .into()
+        };
+
+        widget::scrollable(
+            widget::container(content)
+                .padding([0, space_xl])
+                .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 }
 
@@ -975,21 +1042,21 @@ impl Application for App {
             .active_data()
             .map_or(NavPage::Dashboard, |x| *x);
         let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
-        if !matches!(nav_page, NavPage::Dashboard) {
-            page_header = page_header
-                .push(
-                    widget::button::text(fl!("dashboard"))
-                        .leading_icon(widget::icon::from_name("go-previous-symbolic"))
-                        .on_press(Message::NavPage(NavPage::Dashboard)),
-                )
-                .push(widget::column!(widget::text::title2(nav_page.title())))
-                .push(widget::space().height(space_m));
-        }
+        page_header = page_header
+            .push(
+                widget::button::text(fl!("dashboard"))
+                    .leading_icon(widget::icon::from_name("go-previous-symbolic"))
+                    .on_press(Message::NavPage(NavPage::Dashboard)),
+            )
+            .push(widget::column!(widget::text::title2(nav_page.title())))
+            .push(widget::space().height(space_m));
         let content: Element<Message> = match (nav_page, &self.graph_snapshot) {
             (NavPage::Dashboard, Some(graph_item)) => {
-                widget::responsive(|size| self.view_dashboard(graph_item, size))
+                // view_dashboard will do its own container so it can know correct window height
+                return widget::responsive(|size| self.view_dashboard(graph_item, size))
+                    .height(Length::Fill)
                     .width(Length::Fill)
-                    .into()
+                    .into();
             }
             (NavPage::Applications | NavPage::Processes, _) => {
                 page_header = page_header
