@@ -308,6 +308,7 @@ impl App {
 
         //TODO: do not duplicate code to create process table
         let categories = &[
+            ProcessCategory::App,
             ProcessCategory::Name,
             ProcessCategory::CPU,
             ProcessCategory::Memory,
@@ -345,17 +346,28 @@ impl App {
         {
             let mut row = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
             for &category in categories {
-                row = row.push(
-                    widget::container(
-                        widget::text(item.text(category))
-                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                            .shaping(Shaping::Basic),
-                    )
-                    .align_x(category.data_align())
+                let mut cat_row = widget::row::with_capacity(2)
                     .align_y(Alignment::Center)
-                    .padding([0, 8])
-                    .height(Length::Fixed(40.0))
-                    .width(category.width()),
+                    .spacing(space_xxs);
+                if let Some(icon) = item.get_icon(category) {
+                    cat_row = cat_row.push(icon);
+                }
+                let text = item.text(category);
+                if !text.is_empty() {
+                    cat_row = cat_row.push(
+                        widget::text(text)
+                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                            //TODO: should basic shaping only be used on some columns?
+                            .shaping(Shaping::Basic),
+                    );
+                }
+                row = row.push(
+                    widget::container(cat_row)
+                        .align_x(category.data_align())
+                        .align_y(Alignment::Center)
+                        .padding([0, 8])
+                        .height(Length::Fixed(40.0))
+                        .width(category.width()),
                 );
             }
             column = column.push(
