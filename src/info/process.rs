@@ -13,7 +13,7 @@ use humansize::{BINARY, DECIMAL, format_size};
 use regex::Regex;
 use sysinfo::{Pid, Process, System, Users};
 
-use super::{GpuId, Platform};
+use super::{GpuId, GpuItem, Platform};
 use crate::{fl, info::AppEntry};
 
 fn best_name(p: &Process) -> String {
@@ -49,9 +49,9 @@ pub enum ProcessCategory {
     #[default]
     CPU,
     Memory,
-    GpuUsage(GpuId),
+    GpuUsage(GpuId, Option<usize>),
     GpuUsageTotal,
-    GpuVram(GpuId),
+    GpuVram(GpuId, Option<usize>),
     GpuVramTotal,
     DiskRead,
     DiskWrite,
@@ -60,33 +60,70 @@ pub enum ProcessCategory {
 }
 
 impl ProcessCategory {
-    pub fn applications() -> &'static [Self] {
-        &[
+    pub fn for_applications(sort_category: Self) -> Vec<Self> {
+        vec![
             Self::App,
             Self::Name,
             Self::User,
             Self::CPU,
             Self::Memory,
-            Self::GpuUsageTotal,
-            Self::GpuVramTotal,
+            if let Self::GpuUsage(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuUsageTotal
+            },
+            if let Self::GpuVram(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuVramTotal
+            },
             // Having both disk read and write takes up too much space
             Self::DiskTotal,
         ]
     }
 
-    pub fn processes() -> &'static [Self] {
-        &[
+    pub fn for_processes(sort_category: Self) -> Vec<Self> {
+        vec![
             Self::App,
             Self::Name,
             Self::User,
             Self::PID,
             Self::CPU,
             Self::Memory,
-            Self::GpuUsageTotal,
-            Self::GpuVramTotal,
+            if let Self::GpuUsage(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuUsageTotal
+            },
+            if let Self::GpuVram(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuVramTotal
+            },
             // Having both disk read and write takes up too much space
             Self::DiskTotal,
             Self::Priority,
+        ]
+    }
+
+    pub fn for_top_processes(sort_category: Self) -> Vec<Self> {
+        vec![
+            Self::App,
+            Self::Name,
+            Self::CPU,
+            Self::Memory,
+            if let Self::GpuUsage(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuUsageTotal
+            },
+            if let Self::GpuVram(..) = sort_category {
+                sort_category
+            } else {
+                Self::GpuVramTotal
+            },
+            // Having both disk read and write takes up too much space
+            Self::DiskTotal,
         ]
     }
 
@@ -97,9 +134,9 @@ impl ProcessCategory {
             | Self::PID
             | Self::CPU
             | Self::Memory
-            | Self::GpuUsage(_)
+            | Self::GpuUsage(..)
             | Self::GpuUsageTotal
-            | Self::GpuVram(_)
+            | Self::GpuVram(..)
             | Self::GpuVramTotal
             | Self::DiskRead
             | Self::DiskWrite
@@ -120,8 +157,12 @@ impl fmt::Display for ProcessCategory {
                 Self::PID => fl!("pid"),
                 Self::CPU => fl!("cpu"),
                 Self::Memory => fl!("memory"),
-                Self::GpuUsage(_) | Self::GpuUsageTotal => fl!("gpu"),
-                Self::GpuVram(_) | Self::GpuVramTotal => fl!("gpu-vram"),
+                Self::GpuUsage(_, Some(i)) => fl!("gpu-index", index = i),
+                Self::GpuUsage(_, None) => fl!("gpu-index", index = "?"),
+                Self::GpuUsageTotal => fl!("gpu"),
+                Self::GpuVram(_, Some(i)) => fl!("gpu-vram-index", index = i),
+                Self::GpuVram(_, None) => fl!("gpu-vram-index", index = "?"),
+                Self::GpuVramTotal => fl!("gpu-vram"),
                 Self::DiskRead => fl!("disk-read"),
                 Self::DiskWrite => fl!("disk-write"),
                 Self::DiskTotal => fl!("disk"),
@@ -137,19 +178,21 @@ impl ItemCategory for ProcessCategory {
             Self::App => Length::Fixed(64.0),
             Self::Name => Length::Fill,
             Self::User | Self::PID | Self::Priority => Length::Fixed(96.0),
-            Self::CPU | Self::GpuUsage(_) | Self::GpuUsageTotal => Length::Fixed(64.0),
+            Self::CPU | Self::GpuUsageTotal => Length::Fixed(64.0),
+            Self::GpuUsage(..) => Length::Fixed(80.0),
             Self::Memory
-            | Self::GpuVram(_)
             | Self::GpuVramTotal
             | Self::DiskRead
             | Self::DiskWrite
             | Self::DiskTotal => Length::Fixed(96.0),
+            Self::GpuVram(..) => Length::Fixed(112.0),
         }
     }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProcessGpuInfo {
+    pub index: Option<usize>,
     pub usage: Option<u32>,
     pub vram: Option<u64>,
 }
@@ -187,6 +230,7 @@ impl ProcessItem {
     pub fn new(
         p: &Process,
         sys: &System,
+        gpus: &[GpuItem],
         platform: &Box<dyn Platform>,
         users: &Users,
         refresh: Duration,
@@ -203,12 +247,14 @@ impl ProcessItem {
         let pid = p.pid();
 
         let mut gpu_total = ProcessGpuInfo {
+            index: None,
             usage: None,
             vram: None,
         };
         let mut gpu_usages = HashMap::new();
         for (gpu_id, (usage_float, vram)) in platform.process_gpu_usage(pid) {
             let info = ProcessGpuInfo {
+                index: gpus.iter().position(|gpu| gpu.id == gpu_id),
                 usage: Some((usage_float * 10.0) as u32),
                 vram: Some(vram),
             };
@@ -229,7 +275,7 @@ impl ProcessItem {
                     priority = Some(ok);
                 }
                 Err(err) => {
-                    log::warn!("failed to get priority for {}: {}", p.pid(), err);
+                    log::debug!("failed to get priority for {}: {}", p.pid(), err);
                 }
             }
         }
@@ -282,13 +328,13 @@ impl ProcessItem {
         for (gpu_id, info) in self.gpu_usages.iter() {
             if let Some(usage) = info.usage {
                 self.strings.insert(
-                    ProcessCategory::GpuUsage(*gpu_id),
+                    ProcessCategory::GpuUsage(*gpu_id, info.index),
                     format!("{}.{}%", usage / 10, usage % 10),
                 );
             }
             if let Some(vram) = info.vram {
                 self.strings.insert(
-                    ProcessCategory::GpuVram(*gpu_id),
+                    ProcessCategory::GpuVram(*gpu_id, info.index),
                     format!("{}", format_size(vram, BINARY)),
                 );
             }
@@ -396,7 +442,7 @@ impl ItemInterface<ProcessCategory> for ProcessItem {
             // These are sorted with higher values at the top
             ProcessCategory::CPU => other.cpu_usage.cmp(&self.cpu_usage),
             ProcessCategory::Memory => other.memory.cmp(&self.memory),
-            ProcessCategory::GpuUsage(gpu_id) => {
+            ProcessCategory::GpuUsage(gpu_id, _) => {
                 let self_usage = self
                     .gpu_usages
                     .get(&gpu_id)
@@ -410,7 +456,7 @@ impl ItemInterface<ProcessCategory> for ProcessItem {
                 other_usage.cmp(&self_usage)
             }
             ProcessCategory::GpuUsageTotal => other.gpu_total.usage.cmp(&self.gpu_total.usage),
-            ProcessCategory::GpuVram(gpu_id) => {
+            ProcessCategory::GpuVram(gpu_id, _) => {
                 let self_usage = self
                     .gpu_usages
                     .get(&gpu_id)

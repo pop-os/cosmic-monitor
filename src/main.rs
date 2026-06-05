@@ -122,6 +122,39 @@ Options:
     );
 }
 
+fn table_header(
+    categories: &[ProcessCategory],
+    sort_category: ProcessCategory,
+    sort_direction: bool,
+    sortable: bool,
+) -> Element<'static, Message> {
+    let mut header = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
+    for &category in categories {
+        let mut row = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .height(Length::Fixed(24.0))
+            .padding([0, 8])
+            .width(category.width());
+        row = row.push(widget::text::heading(category.to_string()));
+        if category == sort_category {
+            row = row.push(
+                widget::icon::from_name(if sort_direction {
+                    "pan-up-symbolic"
+                } else {
+                    "pan-down-symbolic"
+                })
+                .size(16),
+            );
+        }
+        if sortable {
+            header = header.push(widget::mouse_area(row).on_press(Message::ProcessSort(category)));
+        } else {
+            header = header.push(row);
+        }
+    }
+    header.into()
+}
+
 fn table_row<'a>(item: &'a ProcessItem, categories: &[ProcessCategory]) -> Element<'a, Message> {
     let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
@@ -334,52 +367,30 @@ impl App {
     fn top_processes_by<'a>(
         &'a self,
         sort_category: ProcessCategory,
+        sort_direction: bool,
         count: usize,
     ) -> Element<'a, Message> {
         let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
-        //TODO: do not duplicate code to create process table
-        let categories = &[
-            ProcessCategory::App,
-            ProcessCategory::Name,
-            ProcessCategory::CPU,
-            ProcessCategory::Memory,
-            if let ProcessCategory::GpuUsage(..) = sort_category {
-                sort_category
-            } else {
-                ProcessCategory::GpuUsageTotal
-            },
-            if let ProcessCategory::GpuVram(..) = sort_category {
-                sort_category
-            } else {
-                ProcessCategory::GpuVramTotal
-            },
-            ProcessCategory::DiskTotal,
-        ];
+        let categories = ProcessCategory::for_top_processes(sort_category);
         let mut column = widget::column::with_capacity(count + 2);
-        let mut header = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
-        for &category in categories {
-            let mut row = widget::row::with_capacity(2)
-                .align_y(Alignment::Center)
-                .height(Length::Fixed(24.0))
-                .padding([0, 8])
-                .width(category.width());
-            row = row.push(widget::text::heading(category.to_string()));
-            if category == sort_category {
-                row = row.push(widget::icon::from_name("pan-down-symbolic").size(16));
+        column = column.push(table_header(
+            &categories,
+            sort_category,
+            sort_direction,
+            false,
+        ));
+        for item in self.processes.iter().k_smallest_by(count, |a, b| {
+            if sort_direction {
+                b.compare(a, sort_category)
+            } else {
+                a.compare(b, sort_category)
             }
-            header = header.push(row);
-        }
-        column = column.push(header);
-        for item in self
-            .processes
-            .iter()
-            .k_smallest_by(count, |a, b| a.compare(b, sort_category))
-        {
+        }) {
             column = column.push(
                 widget::column::with_capacity(2)
                     .push(widget::divider::horizontal::default())
-                    .push(table_row(item, categories)),
+                    .push(table_row(item, &categories)),
             );
         }
         column = column.push(widget::divider::horizontal::default());
@@ -586,18 +597,18 @@ impl App {
             NavPage::Network,
         ));
 
-        for gpu in graph_item.gpus.iter() {
+        for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
                 items.push(card(
                     GraphKind::GpuUsage(gpu.id),
-                    fl!("gpu"),
+                    fl!("gpu-index", index = gpu_i),
                     if let Some(temp) = gpu.temp {
                         format!("{:.1}% / {:.1}°C", usage, temp)
                     } else {
                         format!("{:.1}%", usage)
                     },
                     gpu.name.clone(),
-                    Some(ProcessCategory::GpuUsage(gpu.id)),
+                    Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
                     NavPage::Gpu,
                 ));
             }
@@ -605,7 +616,7 @@ impl App {
                 if let Some(vram_total) = gpu.vram_total {
                     items.push(card(
                         GraphKind::GpuVram(gpu.id),
-                        fl!("gpu-vram"),
+                        fl!("gpu-vram-index", index = gpu_i),
                         format!(
                             "{:.1}% / {}",
                             100.0 * (vram_used as f32) / (vram_total as f32),
@@ -613,7 +624,7 @@ impl App {
                         ),
                         //TODO: show vram total format!("{}", humansize::format_size(vram_total, humansize::BINARY)),
                         gpu.name.clone(),
-                        Some(ProcessCategory::GpuVram(gpu.id)),
+                        Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
                         NavPage::Gpu,
                     ));
                 }
@@ -927,36 +938,25 @@ impl Application for App {
 
                 //TODO: table is too slow, this uses list to emulate table
                 let (categories, content) = match nav_page {
-                    NavPage::Applications => (ProcessCategory::applications(), &self.app_content),
-                    _ => (ProcessCategory::processes(), &self.process_content),
+                    NavPage::Applications => (
+                        ProcessCategory::for_applications(self.process_sort.0),
+                        &self.app_content,
+                    ),
+                    _ => (
+                        ProcessCategory::for_processes(self.process_sort.0),
+                        &self.process_content,
+                    ),
                 };
-                let mut header =
-                    widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
-                for &category in categories {
-                    let mut row = widget::row::with_capacity(2)
-                        .align_y(Alignment::Center)
-                        .height(Length::Fixed(24.0))
-                        .padding([0, 8])
-                        .width(category.width());
-                    row = row.push(widget::text::heading(category.to_string()));
-                    if category == self.process_sort.0 {
-                        row = row.push(
-                            widget::icon::from_name(if self.process_sort.1 {
-                                "pan-up-symbolic"
-                            } else {
-                                "pan-down-symbolic"
-                            })
-                            .size(16),
-                        );
-                    }
-                    header = header
-                        .push(widget::mouse_area(row).on_press(Message::ProcessSort(category)));
-                }
-                page_header = page_header.push(header);
+                page_header = page_header.push(table_header(
+                    &categories,
+                    self.process_sort.0,
+                    self.process_sort.1,
+                    true,
+                ));
                 iced::widget::List::new(content, move |_i, item| {
                     widget::column::with_capacity(2)
                         .push(widget::divider::horizontal::default())
-                        .push(table_row(item, categories))
+                        .push(table_row(item, &categories))
                         .into()
                 })
                 .into()
@@ -1002,7 +1002,7 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::CPU, 5));
+                column = column.push(self.top_processes_by(ProcessCategory::CPU, false, 5));
 
                 // Utilization per core
                 let mut children = Vec::with_capacity(graph_item.cpus.len());
@@ -1097,7 +1097,7 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::Memory, 5));
+                column = column.push(self.top_processes_by(ProcessCategory::Memory, false, 5));
 
                 // Swap information
                 column = column.push(
@@ -1135,7 +1135,7 @@ impl Application for App {
                     .spacing(space_m)
                     .width(Length::Fill);
 
-                for gpu in graph_item.gpus.iter() {
+                for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
                     let mut gpu_col = widget::column::with_capacity(7).spacing(space_xxs);
                     gpu_col = gpu_col.push(widget::text::title4(&gpu.name));
                     if let Some(usage) = gpu.usage {
@@ -1165,8 +1165,11 @@ impl Application for App {
                         );
 
                         // Top processes
-                        gpu_col = gpu_col
-                            .push(self.top_processes_by(ProcessCategory::GpuUsage(gpu.id), 5));
+                        gpu_col = gpu_col.push(self.top_processes_by(
+                            ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
+                            false,
+                            5,
+                        ));
                     }
                     if let Some(vram_used) = gpu.vram_used {
                         if let Some(vram_total) = gpu.vram_total {
@@ -1200,8 +1203,11 @@ impl Application for App {
                             );
 
                             // Top processes
-                            gpu_col = gpu_col
-                                .push(self.top_processes_by(ProcessCategory::GpuVram(gpu.id), 5));
+                            gpu_col = gpu_col.push(self.top_processes_by(
+                                ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
+                                false,
+                                5,
+                            ));
                         }
                     }
                     column = column.push(gpu_col);
@@ -1260,7 +1266,7 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::DiskTotal, 5));
+                column = column.push(self.top_processes_by(ProcessCategory::DiskTotal, false, 5));
 
                 for disk in graph_item.disks.iter() {
                     column = column.push(

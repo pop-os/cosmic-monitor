@@ -256,8 +256,14 @@ pub fn worker() -> impl Stream<Item = Message> {
                         if process.thread_kind().is_some() {
                             continue;
                         }
-                        let item =
-                            ProcessItem::new(process, &sys, &platform, &users, processes_refresh);
+                        let item = ProcessItem::new(
+                            process,
+                            &sys,
+                            &graph_item.gpus,
+                            &platform,
+                            &users,
+                            processes_refresh,
+                        );
                         if let Some(app) = &item.app {
                             let app_item = apps
                                 .entry((app.id.clone(), item.username.clone()))
