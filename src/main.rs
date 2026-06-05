@@ -230,7 +230,7 @@ pub enum Message {
     NavPage(NavPage),
     ProcessSearch(String),
     ProcessSort(ProcessCategory),
-    SeeAllProcesses(ProcessCategory, bool),
+    SeeAllProcesses(bool, ProcessCategory, bool),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
     Surface(surface::Action),
     SystemThemeChange,
@@ -376,8 +376,10 @@ impl App {
 
     fn top_processes_by<'a>(
         &'a self,
+        show_apps: bool,
         sort_category: ProcessCategory,
         sort_direction: bool,
+        sortable: bool,
         count: usize,
     ) -> Element<'a, Message> {
         let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
@@ -388,9 +390,15 @@ impl App {
             &categories,
             sort_category,
             sort_direction,
-            false,
+            sortable,
         ));
-        for item in self.processes.iter().k_smallest_by(count, |a, b| {
+        for item in if show_apps {
+            &self.apps
+        } else {
+            &self.processes
+        }
+        .iter()
+        .k_smallest_by(count, |a, b| {
             if sort_direction {
                 b.compare(a, sort_category)
             } else {
@@ -405,11 +413,23 @@ impl App {
         }
         column = column.push(widget::divider::horizontal::default());
         widget::column!(
-            widget::text::title4(fl!("processes")),
+            widget::text::title4(if show_apps {
+                fl!("applications")
+            } else {
+                fl!("processes")
+            }),
             column,
-            widget::button::text(fl!("see-all-processes"))
-                .trailing_icon(widget::icon::from_name("go-next-symbolic"))
-                .on_press(Message::SeeAllProcesses(sort_category, false)),
+            widget::button::text(if show_apps {
+                fl!("see-all-applications")
+            } else {
+                fl!("see-all-processes")
+            })
+            .trailing_icon(widget::icon::from_name("go-next-symbolic"))
+            .on_press(Message::SeeAllProcesses(
+                show_apps,
+                sort_category,
+                sort_direction
+            )),
         )
         .spacing(space_xxs)
         .into()
@@ -646,7 +666,10 @@ impl App {
         while cols < 4 && size.width / ((cols + 1) as f32) > min_width {
             cols += 1;
         }
-        let mut column = widget::column::with_capacity(items.len() / cols).spacing(space_s);
+        let mut column =
+            widget::column::with_capacity(((items.len() + cols - 1) / cols) + 1).spacing(space_s);
+
+        // Graphs
         let mut row = widget::row::with_capacity(cols).spacing(space_s);
         let mut col = 0;
         for item in items {
@@ -665,6 +688,26 @@ impl App {
             }
             column = column.push(row);
         }
+
+        // Top apps/processes
+        for &show_apps in &[true, false] {
+            column = column.push(
+                widget::container(
+                    widget::column!(self.top_processes_by(
+                        show_apps,
+                        self.process_sort.0,
+                        self.process_sort.1,
+                        true,
+                        5,
+                    ))
+                    .spacing(space_s),
+                )
+                .class(theme::Container::Card)
+                .padding(space_s)
+                .width(Length::Fill),
+            );
+        }
+
         column.into()
     }
 }
@@ -858,10 +901,14 @@ impl Application for App {
                 }
                 self.update_snapshot();
             }
-            Message::SeeAllProcesses(category, direction) => {
+            Message::SeeAllProcesses(show_apps, category, direction) => {
                 self.process_sort = (category, direction);
                 self.update_snapshot();
-                return self.update(Message::NavPage(NavPage::Processes));
+                return self.update(Message::NavPage(if show_apps {
+                    NavPage::Applications
+                } else {
+                    NavPage::Processes
+                }));
             }
             Message::Snapshot(graph_item, apps, processes) => {
                 self.graph_snapshot = Some(graph_item);
@@ -1023,7 +1070,13 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::CPU, false, 5));
+                column = column.push(self.top_processes_by(
+                    false,
+                    ProcessCategory::CPU,
+                    false,
+                    false,
+                    5,
+                ));
 
                 // Utilization per core
                 let mut children = Vec::with_capacity(graph_item.cpus.len());
@@ -1118,7 +1171,13 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::Memory, false, 5));
+                column = column.push(self.top_processes_by(
+                    false,
+                    ProcessCategory::Memory,
+                    false,
+                    false,
+                    5,
+                ));
 
                 // Swap information
                 column = column.push(
@@ -1202,7 +1261,9 @@ impl Application for App {
 
                         // Top processes
                         column = column.push(self.top_processes_by(
+                            false,
                             ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
+                            false,
                             false,
                             5,
                         ));
@@ -1240,7 +1301,9 @@ impl Application for App {
 
                             // Top processes
                             column = column.push(self.top_processes_by(
+                                false,
                                 ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
+                                false,
                                 false,
                                 5,
                             ));
@@ -1302,7 +1365,13 @@ impl Application for App {
                 );
 
                 // Top processes
-                column = column.push(self.top_processes_by(ProcessCategory::DiskTotal, false, 5));
+                column = column.push(self.top_processes_by(
+                    false,
+                    ProcessCategory::DiskTotal,
+                    false,
+                    false,
+                    5,
+                ));
 
                 for disk in graph_item.disks.iter() {
                     column = column.push(

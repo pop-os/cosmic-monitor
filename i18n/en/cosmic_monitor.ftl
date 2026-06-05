@@ -1,6 +1,7 @@
 app-name = COSMIC System Monitor
 comment = System monitor for the COSMIC desktop
 keywords = Monitor;System;Process;CPU;Memory;Network;History;Usage;
+see-all-applications = See all applications
 see-all-processes = See all processes
 
 # Nav Pages
