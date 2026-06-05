@@ -666,11 +666,12 @@ impl App {
         let min_width = 440.0;
         let min_processes_width = 720.0;
         let content_width = size.width - (space_xl * 2) as f32;
-        let (graphs_width, side_by_side) = if content_width > min_processes_width * 2.0 {
-            (content_width - min_processes_width, true)
-        } else {
-            (content_width, false)
-        };
+        let (graphs_width, side_by_side) =
+            if content_width > min_processes_width + space_s as f32 + min_width {
+                (content_width - min_processes_width - space_s as f32, true)
+            } else {
+                (content_width, false)
+            };
         while cols < 4 && graphs_width / ((cols + 1) as f32) > min_width {
             cols += 1;
         }
