@@ -1,4 +1,6 @@
-use freedesktop_desktop_entry::{DesktopEntry, Iter, default_paths, get_languages_from_env};
+use freedesktop_desktop_entry::{
+    DesktopEntry, Iter, default_paths, get_languages_from_env, group_entry_from_path,
+};
 use libc::c_uint;
 use std::{
     collections::HashMap,
@@ -412,6 +414,23 @@ impl Platform for LinuxPlatform {
         //TODO: maximum depth for parent app search?
         loop {
             let proc_args = process.cmd();
+
+            // Handle flatpaks
+            match group_entry_from_path(
+                format!("/proc/{}/root/.flatpak-info", process.pid()),
+                "Application",
+                "name",
+            ) {
+                Ok(Some(name)) => {
+                    for app in self.app_entries.iter() {
+                        if app.id == name {
+                            return Some(app.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             let proc_cmd = proc_args.get(0).and_then(|x| x.to_str())?;
             let proc_exe = process.exe().and_then(|x| x.to_str())?;
             for app in self.app_entries.iter() {
