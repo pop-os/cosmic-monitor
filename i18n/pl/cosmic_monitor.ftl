@@ -71,6 +71,17 @@ match-desktop = Dopasuj do Pulpitu
 dark = Ciemny
 light = Jasny
 
+# Dialogs
+cancel = Anuluj
+
+## Process quit
+force-quit = Wymuś zakończenie
+force-quit-title = Wymusić zakończenie procesu?
+force-quit-body = Wymuszenie zakończenia natychmiast zakończy "{$name}" brutalnie i bez ostrzeżenia. Chcesz kontynuować?
+quit = Zamknij
+quit-title = Zakończyć proces?
+quit-body = Chcesz zakończyć "{$name}"?
+
 # Menu
 
 ## View
