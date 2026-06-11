@@ -85,6 +85,5 @@ quit-body = Do you want to end "{$name}"?
 # Menu
 
 ## View
-view = View
 menu-settings = Settings...
 menu-about = About...
