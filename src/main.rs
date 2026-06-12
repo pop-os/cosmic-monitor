@@ -1332,14 +1332,14 @@ impl Application for App {
                                     graph_item.max_cpu_frequency()
                                 ))
                             ),
-                            widget::column!(
-                                widget::text::body(fl!("temperature")),
-                                widget::text::heading(
-                                    graph_item
-                                        .max_cpu_temp()
-                                        .map_or("N/A".into(), |temp| format!("{:.1}°C", temp))
+                            if let Some(temp) = graph_item.max_cpu_temp() {
+                                widget::column!(
+                                    widget::text::body(fl!("temperature")),
+                                    widget::text::heading(format!("{:.1}°C", temp))
                                 )
-                            ),
+                            } else {
+                                widget::column!()
+                            }
                         )
                         .spacing(space_m),
                         canvas(Graph::new(GraphKind::Cpu, &self.graph_history).legend())
@@ -1520,15 +1520,14 @@ impl Application for App {
                                         widget::text::body(fl!("utilization")),
                                         widget::text::heading(format!("{:.1}%", usage))
                                     ),
-                                    widget::column!(
-                                        widget::text::body(fl!("temperature")),
-                                        widget::text::heading(
-                                            gpu.temp.map_or("N/A".into(), |temp| format!(
-                                                "{:.1}°C",
-                                                temp
-                                            ))
+                                    if let Some(temp) = gpu.temp {
+                                        widget::column!(
+                                            widget::text::body(fl!("temperature")),
+                                            widget::text::heading(format!("{:.1}°C", temp))
                                         )
-                                    ),
+                                    } else {
+                                        widget::column!()
+                                    }
                                 )
                                 .spacing(space_m),
                                 canvas(
@@ -1706,6 +1705,14 @@ impl Application for App {
                                         )
                                     ))
                                 ),
+                                if let Some(temp) = disk.temp {
+                                    widget::column!(
+                                        widget::text::body(fl!("temperature")),
+                                        widget::text::heading(format!("{:.1}°C", temp))
+                                    )
+                                } else {
+                                    widget::column!()
+                                }
                             )
                             .spacing(space_m)
                         )
