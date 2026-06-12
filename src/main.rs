@@ -146,8 +146,6 @@ fn table_header(
                 })
                 .size(16),
             );
-        } else {
-            cat_row = cat_row.push(widget::space().width(16));
         }
         let container = widget::container(cat_row)
             .align_x(category.data_align())
@@ -1485,9 +1483,9 @@ impl Application for App {
                     },
                 ));
 
-                // Swap information
-                column = column.push(
-                    widget::column!(
+                // Swap information (responsive, but no top processes)
+                column = column.push(widget::responsive(move |size| {
+                    let graph = widget::column!(
                         widget::text::title4(fl!("swap-usage")),
                         widget::row!(
                             widget::column!(
@@ -1511,8 +1509,15 @@ impl Application for App {
                             .height(LARGE_GRAPH_HEIGHT)
                             .width(Length::Fill),
                     )
-                    .spacing(space_xxs),
-                );
+                    .spacing(space_xxs);
+                    if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
+                        widget::row!(graph, widget::space().width(MIN_PROCESSES_WIDTH))
+                            .spacing(space_xxl)
+                            .into()
+                    } else {
+                        graph.into()
+                    }
+                }));
 
                 column.into()
             }
