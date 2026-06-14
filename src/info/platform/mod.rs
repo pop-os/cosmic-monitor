@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use sysinfo::{Components, Disk, Pid, Process, System};
 
-use super::{AppEntry, GpuId, GpuItem};
+use super::{AppEntry, DiskItem, GpuId, GpuItem};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -10,10 +10,10 @@ mod linux;
 mod nvml;
 
 pub trait Platform: Send + Sync {
-    fn refresh(&mut self, _components: &Components, _refresh_processes: bool) {}
+    fn refresh(&mut self, _refresh_processes: bool, _components: &Components) {}
 
-    fn disk_name(&self, _disk: &Disk) -> Option<String> {
-        None
+    fn disk_item(&self, disk: &Disk, refresh: Duration, _components: &Components) -> DiskItem {
+        DiskItem::new(disk, refresh)
     }
 
     fn gpus(&self) -> Vec<GpuItem> {

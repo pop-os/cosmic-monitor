@@ -46,6 +46,7 @@ swap-usage = Swap usage
 total-utilization = Total utilization
 
 ## GPU
+gpu-utilization = GPU Utilization
 no-gpus = No supported GPUs found.
 vram = VRAM
 
@@ -54,6 +55,11 @@ all-disks = All disks
 mount-path = Mount path
 reading = Reading
 writing = Writing
+
+## Network
+all-networks = All networks
+receiving = Receiving
+sending = Sending
 
 # Context Pages
 
@@ -71,9 +77,19 @@ match-desktop = Match desktop
 dark = Dark
 light = Light
 
+# Dialogs
+cancel = Cancel
+
+## Process quit
+force-quit = Force quit
+force-quit-title = Force quit the process?
+force-quit-body = Force quit will immediately and forcibly end "{$name}" without cleanup or warning. Do you want to continue?
+quit = Quit
+quit-title = Quit the process?
+quit-body = Do you want to end "{$name}"?
+
 # Menu
 
 ## View
-view = View
 menu-settings = Settings...
 menu-about = About...

@@ -1,43 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use cosmic::widget::menu::Item as MenuItem;
-use cosmic::widget::menu::key_bind::KeyBind;
 use cosmic::{
     Element,
     app::Core,
+    theme,
     widget::{
-        menu::{ItemHeight, ItemWidth},
-        responsive_menu_bar,
+        self,
+        menu::{self, key_bind::KeyBind},
     },
 };
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
 
 use crate::{Action, Config, Message, fl};
 
-static MENU_ID: LazyLock<cosmic::widget::Id> =
-    LazyLock::new(|| cosmic::widget::Id::new("responsive-menu"));
-
 pub fn menu_bar<'a>(
-    core: &Core,
+    _core: &Core,
     _config: &Config,
     key_binds: &HashMap<KeyBind, Action>,
 ) -> Element<'a, Message> {
-    responsive_menu_bar()
-        .item_height(ItemHeight::Dynamic(40))
-        .item_width(ItemWidth::Uniform(320))
-        .spacing(4.0)
-        .into_element(
-            core,
+    menu::bar(vec![menu::Tree::with_children(
+        widget::RcElementWrapper::new(
+            widget::button::icon(widget::icon::from_name("open-menu-symbolic"))
+                .padding([4, 12])
+                .class(theme::Button::MenuRoot)
+                .into(),
+        ),
+        menu::items(
             key_binds,
-            MENU_ID.clone(),
-            Message::Surface,
-            vec![(
-                fl!("view"),
-                vec![
-                    MenuItem::Button(fl!("menu-settings"), None, Action::Settings),
-                    MenuItem::Divider,
-                    MenuItem::Button(fl!("menu-about"), None, Action::About),
-                ],
-            )],
-        )
+            vec![
+                menu::Item::Button(fl!("menu-settings"), None, Action::Settings),
+                menu::Item::Divider,
+                menu::Item::Button(fl!("menu-about"), None, Action::About),
+            ],
+        ),
+    )])
+    .item_height(menu::ItemHeight::Dynamic(40))
+    .item_width(menu::ItemWidth::Uniform(320))
+    .spacing(theme::active().cosmic().spacing.space_xxxs.into())
+    .into()
 }

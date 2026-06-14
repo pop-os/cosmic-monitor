@@ -69,7 +69,7 @@ impl GraphItem {
         let disk_list = disks.list();
         let mut disk_items = Vec::with_capacity(disk_list.len());
         for disk in disk_list {
-            disk_items.push(DiskItem::new(disk, platform, refresh));
+            disk_items.push(platform.disk_item(disk, refresh, &components));
         }
 
         let network_list = networks.list();
@@ -175,7 +175,7 @@ pub fn worker() -> impl Stream<Item = Message> {
                     networks.refresh(true);
                     {
                         let mut platform = platform_lock.write().unwrap();
-                        platform.refresh(&components, false);
+                        platform.refresh(false, &components);
                     }
 
                     if ignore > 0 {
@@ -233,7 +233,7 @@ pub fn worker() -> impl Stream<Item = Message> {
                 networks.refresh(true);
                 {
                     let mut platform = platform_lock.write().unwrap();
-                    platform.refresh(&components, true);
+                    platform.refresh(true, &components);
                 }
 
                 let message = {

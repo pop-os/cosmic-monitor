@@ -1,13 +1,14 @@
 // Copyright 2023 System76 <info@system76.com>
 // SPDX-License-Identifier: GPL-3.0-only
 
+use clap_lex::RawArgs;
 use cosmic::{
-    Application, Element,
+    Application, ApplicationExt, Element,
     app::{Core, Settings, Task, context_drawer},
     cosmic_config::{self, CosmicConfigEntry},
     cosmic_theme, executor,
     iced::{
-        self, Alignment, Length, Limits, Size, Subscription,
+        self, Alignment, Border, Length, Limits, Size, Subscription,
         core::text::{Ellipsize, EllipsizeHeightLimit, Shaping},
     },
     surface, theme,
@@ -29,6 +30,7 @@ use std::{
     error::Error,
     time::{Duration, Instant},
 };
+use sysinfo::Pid;
 
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
@@ -44,7 +46,10 @@ mod localize;
 use menu::menu_bar;
 mod menu;
 
-use clap_lex::RawArgs;
+const SMALL_GRAPH_HEIGHT: f32 = 176.0;
+const LARGE_GRAPH_HEIGHT: f32 = 300.0;
+const MIN_GRAPH_WIDTH: f32 = 640.0;
+const MIN_PROCESSES_WIDTH: f32 = 720.0;
 
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn Error>> {
@@ -130,14 +135,10 @@ fn table_header(
 ) -> Element<'static, Message> {
     let mut header = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
     for &category in categories {
-        let mut row = widget::row::with_capacity(2)
-            .align_y(Alignment::Center)
-            .height(Length::Fixed(24.0))
-            .padding([0, 8])
-            .width(category.width());
-        row = row.push(widget::text::heading(category.to_string()));
+        let mut cat_row = widget::row::with_capacity(2).align_y(Alignment::Center);
+        cat_row = cat_row.push(widget::text::heading(category.to_string()));
         if category == sort_category {
-            row = row.push(
+            cat_row = cat_row.push(
                 widget::icon::from_name(if sort_direction {
                     "pan-up-symbolic"
                 } else {
@@ -146,16 +147,27 @@ fn table_header(
                 .size(16),
             );
         }
+        let container = widget::container(cat_row)
+            .align_x(category.data_align())
+            .align_y(Alignment::Center)
+            .padding([0, 8])
+            .height(Length::Fixed(40.0))
+            .width(category.width());
         if sortable {
-            header = header.push(widget::mouse_area(row).on_press(Message::ProcessSort(category)));
+            header =
+                header.push(widget::mouse_area(container).on_press(Message::ProcessSort(category)));
         } else {
-            header = header.push(row);
+            header = header.push(container);
         }
     }
     header.into()
 }
 
-fn table_row<'a>(item: &'a ProcessItem, categories: &[ProcessCategory]) -> Element<'a, Message> {
+fn table_row<'a>(
+    item: &'a ProcessItem,
+    categories: &[ProcessCategory],
+    selected: &Option<Pid>,
+) -> Element<'a, Message> {
     let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
     let mut row = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
@@ -184,7 +196,25 @@ fn table_row<'a>(item: &'a ProcessItem, categories: &[ProcessCategory]) -> Eleme
                 .width(category.width()),
         );
     }
-    row.into()
+    let mut container = widget::container(row);
+    //TODO: allow App selection
+    if selected.is_some() && selected == &item.pid {
+        container = container.style(|theme| {
+            let cosmic = theme.cosmic();
+            widget::container::Style {
+                text_color: Some(cosmic.on_accent_color().into()),
+                background: Some(cosmic.accent_color().into()),
+                border: Border {
+                    radius: cosmic.corner_radii.radius_xs.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        });
+    }
+    widget::mouse_area(container)
+        .on_press(Message::ProcessSelect(item.pid))
+        .into()
 }
 
 #[derive(Clone, Debug)]
@@ -218,17 +248,26 @@ impl MenuAction for Action {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum DialogKind {
+    ProcessQuit { name: String, pid: Pid, force: bool },
+}
+
 /// Messages that are used specifically by our [`App`].
 #[derive(Clone, Debug)]
 pub enum Message {
     None,
     AppTheme(AppTheme),
     Config(Box<Config>),
+    DialogCancel,
+    DialogConfirm,
+    DialogOpen(DialogKind),
     GpuSelect(usize),
     Graph(GraphItem),
     LaunchUrl(String),
     NavPage(NavPage),
     ProcessSearch(String),
+    ProcessSelect(Option<Pid>),
     ProcessSort(ProcessCategory),
     SeeAllProcesses(bool, ProcessCategory, bool),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
@@ -288,11 +327,11 @@ pub struct App {
     about: About,
     app_themes: Vec<String>,
     apps: Vec<ProcessItem>,
-    app_content: iced::widget::list::Content<ProcessItem>,
     config: Config,
     config_handler: Option<cosmic_config::Config>,
     context_page: ContextPage,
     core: Core,
+    dialog_opt: Option<DialogKind>,
     gpu_id_opt: Option<GpuId>,
     gpu_names: Vec<String>,
     graph_history: VecDeque<GraphItem>,
@@ -302,6 +341,7 @@ pub struct App {
     processes: Vec<ProcessItem>,
     process_content: iced::widget::list::Content<ProcessItem>,
     process_search: (String, Option<Regex>),
+    process_selected: Option<Pid>,
     process_sort: (ProcessCategory, bool),
 }
 
@@ -319,35 +359,38 @@ impl App {
             }
         }
 
-        for (list, content) in &mut [
-            (&mut self.apps, &mut self.app_content),
-            (&mut self.processes, &mut self.process_content),
-        ] {
-            list.sort_by(|a, b| {
-                if self.process_sort.1 {
-                    b.compare(a, self.process_sort.0)
-                } else {
-                    a.compare(b, self.process_sort.0)
-                }
-            });
+        let list = if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
+            &mut self.apps
+        } else {
+            &mut self.processes
+        };
+        list.sort_by(|a, b| {
+            if self.process_sort.1 {
+                b.compare(a, self.process_sort.0)
+            } else {
+                a.compare(b, self.process_sort.0)
+            }
+        });
 
-            let mut i = 0;
-            for item in list.iter() {
-                if let Some(regex) = &self.process_search.1 {
-                    if !item.matches(&regex) {
-                        continue;
-                    }
+        let mut i = 0;
+        for item in list.iter() {
+            if let Some(regex) = &self.process_search.1 {
+                if !item.matches(&regex) {
+                    continue;
                 }
-                if i >= content.len() {
-                    content.push(item.clone());
-                } else if content.get(i) != Some(&item) {
-                    *content.get_mut(i).unwrap() = item.clone();
-                }
-                i += 1;
             }
-            while i < content.len() {
-                content.remove(i);
+            if i >= self.process_content.len() {
+                self.process_content.push(item.clone());
+            } else if self.process_content.get(i) != Some(&item) {
+                *self.process_content.get_mut(i).unwrap() = item.clone();
             }
+            i += 1;
+        }
+        while i < self.process_content.len() {
+            self.process_content.remove(i);
         }
     }
 
@@ -372,6 +415,37 @@ impl App {
         );
 
         widget::settings::view_column(vec![appearance_section.into()]).into()
+    }
+
+    fn responsive_graph_top_processes<'a>(
+        &'a self,
+        category: ProcessCategory,
+        f: impl Fn() -> Element<'a, Message> + 'a,
+    ) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_xxl, space_l, ..
+        } = theme::active().cosmic().spacing;
+
+        widget::responsive(move |size| {
+            let graph = f();
+            if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
+                widget::row!(
+                    graph,
+                    widget::container(self.top_processes_by(false, category, false, false, 7))
+                        .width(MIN_PROCESSES_WIDTH)
+                )
+                .spacing(space_xxl)
+                .into()
+            } else {
+                widget::column!(
+                    graph,
+                    self.top_processes_by(false, category, false, false, 5)
+                )
+                .spacing(space_l)
+                .into()
+            }
+        })
+        .into()
     }
 
     fn top_processes_by<'a>(
@@ -408,7 +482,7 @@ impl App {
             column = column.push(
                 widget::column::with_capacity(2)
                     .push(widget::divider::horizontal::default())
-                    .push(table_row(item, &categories)),
+                    .push(table_row(item, &categories, &self.process_selected)),
             );
         }
         column = column.push(widget::divider::horizontal::default());
@@ -545,7 +619,7 @@ impl App {
             widget::container(
                 widget::row!(
                     canvas(Graph::new(graph_kind, &self.graph_history).border())
-                        .height(176.0)
+                        .height(SMALL_GRAPH_HEIGHT)
                         .width(Length::Fill),
                     column.width(Length::Fill)
                 )
@@ -662,24 +736,23 @@ impl App {
             }
         }
 
-        let card_height = (space_s + 176 + space_s) as f32;
+        let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
         let min_width = 440.0;
-        let min_processes_width = 720.0;
         let content_width = size.width - (space_xl * 2) as f32;
         enum DashboardLayout {
             Small,
             Medium,
             Large,
         }
-        let large_width = content_width - (min_processes_width + space_s as f32) * 2.0;
+        let large_width = content_width - (MIN_PROCESSES_WIDTH + space_s as f32) * 2.0;
         let large_cards = (large_width / min_width).floor()
             * (size.height / (card_height + space_s as f32)).floor();
         // Make sure there is enough space for all cards before attempting large layout
         let (graphs_width, layout) = if large_cards >= items.len() as f32 {
             (large_width, DashboardLayout::Large)
-        } else if content_width > min_processes_width + space_s as f32 + min_width {
+        } else if content_width > MIN_PROCESSES_WIDTH + space_s as f32 + min_width {
             (
-                content_width - (min_processes_width + space_s as f32),
+                content_width - (MIN_PROCESSES_WIDTH + space_s as f32),
                 DashboardLayout::Medium,
             )
         } else {
@@ -780,7 +853,7 @@ impl App {
                 widget::row!(
                     widget::row::with_children(list_cards)
                         .spacing(space_s)
-                        .width(Length::Fixed(min_processes_width * 2.0 + space_s as f32)),
+                        .width(Length::Fixed(MIN_PROCESSES_WIDTH * 2.0 + space_s as f32)),
                     column
                 )
                 .spacing(space_s)
@@ -791,7 +864,7 @@ impl App {
                 widget::row!(
                     widget::column::with_children(list_cards)
                         .spacing(space_s)
-                        .width(Length::Fixed(min_processes_width)),
+                        .width(Length::Fixed(MIN_PROCESSES_WIDTH)),
                     column
                 )
                 .spacing(space_s)
@@ -808,13 +881,16 @@ impl App {
             }
         };
 
-        widget::scrollable(
-            widget::container(content)
-                .padding([0, space_xl])
-                .width(Length::Fill),
+        widget::mouse_area(
+            widget::scrollable(
+                widget::container(content)
+                    .padding([0, space_xl, space_s, space_xl])
+                    .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
         )
-        .width(Length::Fill)
-        .height(Length::Fill)
+        .on_press(Message::ProcessSelect(None))
         .into()
     }
 }
@@ -873,7 +949,9 @@ impl Application for App {
                 if matches!(page, NavPage::Dashboard) {
                     b = b.activate();
                 }
-                b.text(page.title()).data::<NavPage>(page)
+                b.text(page.title())
+                    .data::<NavPage>(page)
+                    .data::<widget::Id>(widget::Id::unique())
             });
         }
 
@@ -881,11 +959,11 @@ impl Application for App {
             about,
             app_themes,
             apps: Vec::new(),
-            app_content: iced::widget::list::Content::new(),
             config: flags.config,
             config_handler: flags.config_handler,
             context_page: ContextPage::Settings,
             core,
+            dialog_opt: None,
             gpu_id_opt: None,
             gpu_names: Vec::new(),
             graph_history: VecDeque::new(),
@@ -895,10 +973,11 @@ impl Application for App {
             processes: Vec::new(),
             process_content: iced::widget::list::Content::new(),
             process_search: (String::new(), None),
+            process_selected: None,
             process_sort: (ProcessCategory::default(), false),
         };
 
-        let command = app.update_config();
+        let command = Task::batch([app.update_config(), app.set_window_title(fl!("app-name"))]);
         (app, command)
     }
 
@@ -908,14 +987,25 @@ impl Application for App {
 
     //TODO: currently the first escape unfocuses, and the second calls this function
     fn on_escape(&mut self) -> Task<Message> {
+        if self.dialog_opt.take().is_some() {
+            return Task::none();
+        }
         if self.core.window.show_context {
             return self.update(Message::ToggleContextPage(self.context_page));
+        }
+        if self.process_selected.take().is_some() {
+            return Task::none();
+        }
+        if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
+            return self.update(Message::ProcessSearch(String::new()));
         }
         Task::none()
     }
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Self::Message> {
         self.nav_model.activate(id);
+        self.process_selected = None;
+        self.update_snapshot();
         Task::none()
     }
 
@@ -954,6 +1044,30 @@ impl Application for App {
                     return self.update_config();
                 }
             }
+            Message::DialogCancel => {
+                self.dialog_opt = None;
+            }
+            Message::DialogConfirm => {
+                if let Some(dialog_kind) = self.dialog_opt.take() {
+                    match dialog_kind {
+                        DialogKind::ProcessQuit { pid, force, .. } => {
+                            //TODO: show errors?
+                            #[cfg(unix)]
+                            {
+                                if let Ok(pid_c) = pid.as_u32().try_into() {
+                                    let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+                                    unsafe {
+                                        libc::kill(pid_c, sig);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Message::DialogOpen(dialog_kind) => {
+                self.dialog_opt = Some(dialog_kind);
+            }
             Message::GpuSelect(gpu_i) => {
                 self.gpu_id_opt = None;
                 if let Some(graph_item) = &self.graph_snapshot {
@@ -984,6 +1098,8 @@ impl Application for App {
                 }
                 if let Some(id) = id_opt {
                     self.nav_model.activate(id);
+                    self.process_selected = None;
+                    self.update_snapshot();
                 }
             }
             Message::ProcessSearch(search) => {
@@ -997,6 +1113,10 @@ impl Application for App {
                 };
                 self.process_search = (search, regex_opt);
                 self.update_snapshot();
+            }
+            Message::ProcessSelect(process_selected) => {
+                self.process_selected = process_selected;
+                //TODO: reset that item in Contents?
             }
             Message::ProcessSort(category) => {
                 if self.process_sort.0 == category {
@@ -1062,6 +1182,92 @@ impl Application for App {
         })
     }
 
+    fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        let mut dialog = widget::dialog().secondary_action(
+            widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+        );
+        match self.dialog_opt.as_ref()? {
+            DialogKind::ProcessQuit { name, force, .. } => {
+                dialog = dialog
+                    .title(if *force {
+                        fl!("force-quit-title")
+                    } else {
+                        fl!("quit-title")
+                    })
+                    .body(if *force {
+                        fl!("force-quit-body", name = name)
+                    } else {
+                        fl!("quit-body", name = name)
+                    })
+                    .primary_action(
+                        widget::button::destructive(if *force {
+                            fl!("force-quit")
+                        } else {
+                            fl!("quit")
+                        })
+                        .on_press(Message::DialogConfirm),
+                    );
+            }
+        }
+        Some(dialog.into())
+    }
+
+    fn footer(&self) -> Option<Element<'_, Self::Message>> {
+        let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+
+        let pid = self.process_selected?;
+        let item = self.processes.iter().find(|x| x.pid == Some(pid))?;
+        let mut row = widget::row::with_capacity(5)
+            .align_y(Alignment::Center)
+            .spacing(space_xxs);
+        if let Some(icon) = item.get_icon(ProcessCategory::App) {
+            row = row.push(icon);
+        }
+        row = row
+            .push(
+                widget::container(
+                    widget::text(&item.name)
+                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                        .shaping(Shaping::Basic),
+                )
+                .align_x(Alignment::Start)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
+            )
+            .push(
+                widget::container(
+                    widget::text(item.text(ProcessCategory::PID)).shaping(Shaping::Basic),
+                )
+                .align_x(Alignment::End)
+                .align_y(Alignment::Center)
+                .width(Length::Shrink),
+            )
+            .push(
+                widget::button::destructive(fl!("force-quit")).on_press(Message::DialogOpen(
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid,
+                        force: true,
+                    },
+                )),
+            )
+            .push(
+                widget::button::standard(fl!("quit")).on_press(Message::DialogOpen(
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid,
+                        force: false,
+                    },
+                )),
+            );
+        Some(
+            widget::container(row)
+                .padding(space_xxs)
+                .class(theme::Container::Card)
+                .into(),
+        )
+    }
+
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
         vec![menu_bar(&self.core, &self.config, &self.key_binds)]
     }
@@ -1069,8 +1275,11 @@ impl Application for App {
     /// Creates a view after each update.
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
+            space_xxl,
             space_xl,
+            space_l,
             space_m,
+            space_s,
             space_xs,
             space_xxs,
             ..
@@ -1078,7 +1287,7 @@ impl Application for App {
 
         let nav_page = self
             .nav_model
-            .active_data()
+            .active_data::<NavPage>()
             .map_or(NavPage::Dashboard, |x| *x);
         let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
         page_header = page_header
@@ -1091,17 +1300,22 @@ impl Application for App {
             .push(widget::space().height(space_m));
         let content: Element<Message> = match (nav_page, &self.graph_snapshot) {
             (NavPage::Dashboard, Some(graph_item)) => {
-                // view_dashboard will do its own container so it can know correct window height
-                return widget::responsive(|size| self.view_dashboard(graph_item, size))
+                let content = widget::responsive(|size| self.view_dashboard(graph_item, size))
                     .height(Length::Fill)
-                    .width(Length::Fill)
-                    .into();
+                    .width(Length::Fill);
+                // view_dashboard will do its own container so it can know correct window height
+                return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
+                    widget::id_container(content, id.clone()).into()
+                } else {
+                    content.into()
+                };
             }
             (NavPage::Applications | NavPage::Processes, _) => {
                 page_header = page_header
                     .push(
                         widget::container(
                             widget::search_input(fl!("search-processes"), &self.process_search.0)
+                                .on_clear(Message::ProcessSearch(String::new()))
                                 .on_input(Message::ProcessSearch)
                                 .width(360.0),
                         )
@@ -1111,15 +1325,9 @@ impl Application for App {
                     .push(widget::space().height(space_m));
 
                 //TODO: table is too slow, this uses list to emulate table
-                let (categories, content) = match nav_page {
-                    NavPage::Applications => (
-                        ProcessCategory::for_applications(self.process_sort.0),
-                        &self.app_content,
-                    ),
-                    _ => (
-                        ProcessCategory::for_processes(self.process_sort.0),
-                        &self.process_content,
-                    ),
+                let categories = match nav_page {
+                    NavPage::Applications => ProcessCategory::for_applications(self.process_sort.0),
+                    _ => ProcessCategory::for_processes(self.process_sort.0),
                 };
                 page_header = page_header.push(table_header(
                     &categories,
@@ -1127,61 +1335,56 @@ impl Application for App {
                     self.process_sort.1,
                     true,
                 ));
-                iced::widget::List::new(content, move |_i, item| {
+                iced::widget::List::new(&self.process_content, move |_i, item| {
                     widget::column::with_capacity(2)
                         .push(widget::divider::horizontal::default())
-                        .push(table_row(item, &categories))
+                        .push(table_row(item, &categories, &self.process_selected))
                         .into()
                 })
                 .into()
             }
             (NavPage::Cpu, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(3)
-                    .spacing(space_m)
+                let mut column = widget::column::with_capacity(2)
+                    .spacing(space_l)
                     .width(Length::Fill);
 
-                // Overall utilization
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("overall-utilization")),
-                        widget::row!(
-                            widget::column!(
-                                widget::text::body(fl!("utilization")),
-                                widget::text::heading(format!(
-                                    "{:.1}%",
-                                    graph_item.total_cpu_usage()
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("speed")),
-                                widget::text::heading(format_frequency(
-                                    graph_item.max_cpu_frequency()
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("temperature")),
-                                widget::text::heading(
-                                    graph_item
-                                        .max_cpu_temp()
-                                        .map_or("N/A".into(), |temp| format!("{:.1}°C", temp))
-                                )
-                            ),
-                        )
-                        .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Cpu, &self.graph_history).legend())
-                            .height(300.0)
-                            .width(Length::Fill),
-                    )
-                    .spacing(space_xxs),
-                );
-
-                // Top processes
-                column = column.push(self.top_processes_by(
-                    false,
+                // Overall utilization and top processes
+                column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::CPU,
-                    false,
-                    false,
-                    5,
+                    move || {
+                        widget::column!(
+                            widget::text::title4(fl!("overall-utilization")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("utilization")),
+                                    widget::text::heading(format!(
+                                        "{:.1}%",
+                                        graph_item.total_cpu_usage()
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("speed")),
+                                    widget::text::heading(format_frequency(
+                                        graph_item.max_cpu_frequency()
+                                    ))
+                                ),
+                                if let Some(temp) = graph_item.max_cpu_temp() {
+                                    widget::column!(
+                                        widget::text::body(fl!("temperature")),
+                                        widget::text::heading(format!("{:.1}°C", temp))
+                                    )
+                                } else {
+                                    widget::column!()
+                                }
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::Cpu, &self.graph_history).legend())
+                                .height(LARGE_GRAPH_HEIGHT)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs)
+                        .into()
+                    },
                 ));
 
                 // Utilization per core
@@ -1224,70 +1427,65 @@ impl Application for App {
             (NavPage::Memory, Some(graph_item)) => {
                 let mem = &graph_item.memory;
 
-                let mut column = widget::column::with_capacity(3)
-                    .spacing(space_m)
+                let mut column = widget::column::with_capacity(2)
+                    .spacing(space_l)
                     .width(Length::Fill);
 
-                // Memory information
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("memory-usage")),
-                        widget::row!(
-                            widget::column!(
-                                widget::text::body(fl!("capacity")),
-                                widget::text::heading(
-                                    humansize::format_size(mem.total, humansize::BINARY)
-                                        .to_string()
-                                )
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("in-use")),
-                                widget::text::heading(format!(
-                                    "{} ({:.1}%)",
-                                    humansize::format_size(mem.used, humansize::BINARY),
-                                    100.0 * (mem.used as f64) / (mem.total as f64)
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("cache")),
-                                widget::text::heading(format!(
-                                    "{} ({:.1}%)",
-                                    humansize::format_size(mem.cache, humansize::BINARY),
-                                    100.0 * (mem.cache as f64) / (mem.total as f64)
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("total-utilization")),
-                                widget::text::heading({
-                                    let total_used = mem.used + mem.cache;
-                                    format!(
-                                        "{} ({:.1}%)",
-                                        humansize::format_size(total_used, humansize::BINARY),
-                                        100.0 * (total_used as f64) / (mem.total as f64)
-                                    )
-                                })
-                            ),
-                        )
-                        .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
-                            .height(300.0)
-                            .width(Length::Fill),
-                    )
-                    .spacing(space_xxs),
-                );
-
-                // Top processes
-                column = column.push(self.top_processes_by(
-                    false,
+                // Memory information and top processes
+                column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::Memory,
-                    false,
-                    false,
-                    5,
+                    move || {
+                        widget::column!(
+                            widget::text::title4(fl!("memory-usage")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("capacity")),
+                                    widget::text::heading(
+                                        humansize::format_size(mem.total, humansize::BINARY)
+                                            .to_string()
+                                    )
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("in-use")),
+                                    widget::text::heading(format!(
+                                        "{} ({:.1}%)",
+                                        humansize::format_size(mem.used, humansize::BINARY),
+                                        100.0 * (mem.used as f64) / (mem.total as f64)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("cache")),
+                                    widget::text::heading(format!(
+                                        "{} ({:.1}%)",
+                                        humansize::format_size(mem.cache, humansize::BINARY),
+                                        100.0 * (mem.cache as f64) / (mem.total as f64)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("total-utilization")),
+                                    widget::text::heading({
+                                        let total_used = mem.used + mem.cache;
+                                        format!(
+                                            "{} ({:.1}%)",
+                                            humansize::format_size(total_used, humansize::BINARY),
+                                            100.0 * (total_used as f64) / (mem.total as f64)
+                                        )
+                                    })
+                                ),
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
+                                .height(LARGE_GRAPH_HEIGHT)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs)
+                        .into()
+                    },
                 ));
 
-                // Swap information
-                column = column.push(
-                    widget::column!(
+                // Swap information (responsive, but no top processes)
+                column = column.push(widget::responsive(move |size| {
+                    let graph = widget::column!(
                         widget::text::title4(fl!("swap-usage")),
                         widget::row!(
                             widget::column!(
@@ -1308,11 +1506,18 @@ impl Application for App {
                         )
                         .spacing(space_m),
                         canvas(Graph::new(GraphKind::Swap, &self.graph_history).legend())
-                            .height(300.0)
+                            .height(LARGE_GRAPH_HEIGHT)
                             .width(Length::Fill),
                     )
-                    .spacing(space_xxs),
-                );
+                    .spacing(space_xxs);
+                    if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
+                        widget::row!(graph, widget::space().width(MIN_PROCESSES_WIDTH))
+                            .spacing(space_xxl)
+                            .into()
+                    } else {
+                        graph.into()
+                    }
+                }));
 
                 column.into()
             }
@@ -1337,81 +1542,90 @@ impl Application for App {
                             .spacing(space_xxs),
                         )
                         .push(widget::space().height(space_m));
-                    let mut column = widget::column::with_capacity(6).spacing(space_xxs);
-                    //column = column.push(widget::text::title4(&gpu.name));
+                    let mut column = widget::column::with_capacity(2).spacing(space_l);
                     if let Some(usage) = gpu.usage {
-                        column = column.push(
-                            widget::row!(
-                                widget::column!(
-                                    widget::text::body(fl!("utilization")),
-                                    widget::text::heading(format!("{:.1}%", usage))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("temperature")),
-                                    widget::text::heading(
-                                        gpu.temp
-                                            .map_or("N/A".into(), |temp| format!("{:.1}°C", temp))
-                                    )
-                                ),
-                            )
-                            .spacing(space_m),
-                        );
-                        column = column.push(
-                            canvas(
-                                Graph::new(GraphKind::GpuUsage(gpu.id), &self.graph_history)
-                                    .legend(),
-                            )
-                            .height(300.0)
-                            .width(Length::Fill),
-                        );
-
-                        // Top processes
-                        column = column.push(self.top_processes_by(
-                            false,
+                        // GPU utilization and top processes
+                        column = column.push(self.responsive_graph_top_processes(
                             ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
-                            false,
-                            false,
-                            5,
+                            move || {
+                                widget::column!(
+                                    widget::text::title4(fl!("gpu-utilization")),
+                                    widget::row!(
+                                        widget::column!(
+                                            widget::text::body(fl!("utilization")),
+                                            widget::text::heading(format!("{:.1}%", usage))
+                                        ),
+                                        if let Some(temp) = gpu.temp {
+                                            widget::column!(
+                                                widget::text::body(fl!("temperature")),
+                                                widget::text::heading(format!("{:.1}°C", temp))
+                                            )
+                                        } else {
+                                            widget::column!()
+                                        }
+                                    )
+                                    .spacing(space_m),
+                                    canvas(
+                                        Graph::new(
+                                            GraphKind::GpuUsage(gpu.id),
+                                            &self.graph_history
+                                        )
+                                        .legend(),
+                                    )
+                                    .height(LARGE_GRAPH_HEIGHT)
+                                    .width(Length::Fill),
+                                )
+                                .spacing(space_xxs)
+                                .into()
+                            },
                         ));
                     }
                     if let Some(vram_used) = gpu.vram_used {
                         if let Some(vram_total) = gpu.vram_total {
-                            column = column.push(
-                                widget::row!(
-                                    widget::column!(
-                                        widget::text::body(fl!("capacity")),
-                                        widget::text::heading(
-                                            humansize::format_size(vram_total, humansize::BINARY)
-                                                .to_string()
-                                        )
-                                    ),
-                                    widget::column!(
-                                        widget::text::body(fl!("vram")),
-                                        widget::text::heading(format!(
-                                            "{} ({:.1}%)",
-                                            humansize::format_size(vram_used, humansize::BINARY),
-                                            100.0 * (vram_used as f64) / (vram_total as f64)
-                                        ))
-                                    ),
-                                )
-                                .spacing(space_m),
-                            );
-                            column = column.push(
-                                canvas(
-                                    Graph::new(GraphKind::GpuVram(gpu.id), &self.graph_history)
-                                        .legend(),
-                                )
-                                .height(300.0)
-                                .width(Length::Fill),
-                            );
-
-                            // Top processes
-                            column = column.push(self.top_processes_by(
-                                false,
+                            // GPU VRAM and top processes
+                            column = column.push(self.responsive_graph_top_processes(
                                 ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
-                                false,
-                                false,
-                                5,
+                                move || {
+                                    widget::column!(
+                                        widget::text::title4(fl!("gpu-vram")),
+                                        widget::row!(
+                                            widget::column!(
+                                                widget::text::body(fl!("capacity")),
+                                                widget::text::heading(
+                                                    humansize::format_size(
+                                                        vram_total,
+                                                        humansize::BINARY
+                                                    )
+                                                    .to_string()
+                                                )
+                                            ),
+                                            widget::column!(
+                                                widget::text::body(fl!("vram")),
+                                                widget::text::heading(format!(
+                                                    "{} ({:.1}%)",
+                                                    humansize::format_size(
+                                                        vram_used,
+                                                        humansize::BINARY
+                                                    ),
+                                                    100.0 * (vram_used as f64)
+                                                        / (vram_total as f64)
+                                                ))
+                                            ),
+                                        )
+                                        .spacing(space_m),
+                                        canvas(
+                                            Graph::new(
+                                                GraphKind::GpuVram(gpu.id),
+                                                &self.graph_history
+                                            )
+                                            .legend(),
+                                        )
+                                        .height(LARGE_GRAPH_HEIGHT)
+                                        .width(Length::Fill),
+                                    )
+                                    .spacing(space_xxs)
+                                    .into()
+                                },
                             ));
                         }
                     }
@@ -1421,62 +1635,57 @@ impl Application for App {
                 }
             }
             (NavPage::Disk, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(2 + graph_item.disks.len() * 3)
-                    .spacing(space_m)
+                let mut column = widget::column::with_capacity(1 + graph_item.disks.len())
+                    .spacing(space_l)
                     .width(Length::Fill);
 
                 let all_used = graph_item.disks.iter().fold(0, |x, disk| x + disk.used);
                 let all_total = graph_item.disks.iter().fold(0, |x, disk| x + disk.total);
                 let all_io = graph_item.total_disk_io();
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("all-disks")),
-                        widget::row!(
-                            widget::column!(
-                                widget::text::body(fl!("capacity")),
-                                widget::text::heading(
-                                    humansize::format_size(all_total, humansize::BINARY)
-                                        .to_string()
-                                )
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("in-use")),
-                                widget::text::heading(format!(
-                                    "{} ({:.1}%)",
-                                    humansize::format_size(all_used, humansize::BINARY),
-                                    100.0 * (all_used as f64) / (all_total as f64)
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("reading")),
-                                widget::text::heading(format!(
-                                    "{}/s",
-                                    humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("writing")),
-                                widget::text::heading(format!(
-                                    "{}/s",
-                                    humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
-                                ))
-                            ),
-                        )
-                        .spacing(space_m),
-                        canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                            .height(300.0)
-                            .width(Length::Fill),
-                    )
-                    .spacing(space_xxs),
-                );
-
-                // Top processes
-                column = column.push(self.top_processes_by(
-                    false,
+                column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::DiskTotal,
-                    false,
-                    false,
-                    5,
+                    move || {
+                        widget::column!(
+                            widget::text::title4(fl!("all-disks")),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("capacity")),
+                                    widget::text::heading(
+                                        humansize::format_size(all_total, humansize::BINARY)
+                                            .to_string()
+                                    )
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("in-use")),
+                                    widget::text::heading(format!(
+                                        "{} ({:.1}%)",
+                                        humansize::format_size(all_used, humansize::BINARY),
+                                        100.0 * (all_used as f64) / (all_total as f64)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("reading")),
+                                    widget::text::heading(format!(
+                                        "{}/s",
+                                        humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("writing")),
+                                    widget::text::heading(format!(
+                                        "{}/s",
+                                        humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
+                                    ))
+                                ),
+                            )
+                            .spacing(space_m),
+                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
+                                .height(LARGE_GRAPH_HEIGHT)
+                                .width(Length::Fill),
+                        )
+                        .spacing(space_xxs)
+                        .into()
+                    },
                 ));
 
                 for disk in graph_item.disks.iter() {
@@ -1523,32 +1732,42 @@ impl Application for App {
                                         )
                                     ))
                                 ),
+                                if let Some(temp) = disk.temp {
+                                    widget::column!(
+                                        widget::text::body(fl!("temperature")),
+                                        widget::text::heading(format!("{:.1}°C", temp))
+                                    )
+                                } else {
+                                    widget::column!()
+                                }
                             )
-                            .spacing(space_m)
-                        )
-                        .spacing(space_xxs),
-                    );
-                    column = column.push(
-                        widget::column!(
-                            widget::text::title4(fl!("reading")),
-                            canvas(
-                                Graph::new(GraphKind::DiskRead(&disk.name), &self.graph_history)
-                                    .legend(),
-                            )
-                            .height(300.0)
-                            .width(Length::Fill)
-                        )
-                        .spacing(space_xxs),
-                    );
-                    column = column.push(
-                        widget::column!(
-                            widget::text::title4(fl!("writing")),
-                            canvas(
-                                Graph::new(GraphKind::DiskWrite(&disk.name), &self.graph_history)
-                                    .legend(),
-                            )
-                            .height(300.0)
-                            .width(Length::Fill)
+                            .spacing(space_m),
+                            widget::responsive(move |size| {
+                                let mut graphs = Vec::with_capacity(2);
+                                for (title, graph_kind) in [
+                                    (fl!("reading"), GraphKind::DiskRead(&disk.name)),
+                                    (fl!("writing"), GraphKind::DiskWrite(&disk.name)),
+                                ] {
+                                    graphs.push(Element::from(
+                                        widget::column!(
+                                            widget::text::title4(title),
+                                            canvas(
+                                                Graph::new(graph_kind, &self.graph_history)
+                                                    .legend(),
+                                            )
+                                            .height(LARGE_GRAPH_HEIGHT)
+                                            .width(Length::Fill)
+                                        )
+                                        .spacing(space_xxs),
+                                    ));
+                                }
+                                if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_GRAPH_WIDTH
+                                {
+                                    Element::from(widget::row(graphs).spacing(space_xxl))
+                                } else {
+                                    Element::from(widget::column(graphs).spacing(space_xxs))
+                                }
+                            })
                         )
                         .spacing(space_xxs),
                     );
@@ -1556,52 +1775,111 @@ impl Application for App {
                 column.into()
             }
             (NavPage::Network, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(graph_item.networks.len() * 6)
+                let mut column = widget::column::with_capacity(1 + graph_item.networks.len())
+                    .spacing(space_l)
                     .width(Length::Fill);
+
+                let all_io = graph_item.total_network_io();
+                column = column.push(
+                    widget::column!(
+                        widget::text::title4(fl!("all-networks")),
+                        widget::row!(
+                            widget::column!(
+                                widget::text::body(fl!("receiving")),
+                                widget::text::heading(format!(
+                                    "{}/s",
+                                    humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
+                                ))
+                            ),
+                            widget::column!(
+                                widget::text::body(fl!("sending")),
+                                widget::text::heading(format!(
+                                    "{}/s",
+                                    humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
+                                ))
+                            ),
+                        )
+                        .spacing(space_m),
+                        canvas(Graph::new(GraphKind::NetworkTotal, &self.graph_history).legend())
+                            .height(LARGE_GRAPH_HEIGHT)
+                            .width(Length::Fill),
+                    )
+                    .spacing(space_xxs),
+                );
+
                 for net in graph_item.networks.iter() {
-                    column = column.push(widget::text(format!("Name: {}", net.name)));
-                    column = column.push(widget::text(format!(
-                        "Rx: {}/s",
-                        humansize::format_size(net.rx as u64, humansize::DECIMAL)
-                    )));
                     column = column.push(
-                        canvas(
-                            Graph::new(GraphKind::NetworkRx(&net.name), &self.graph_history)
-                                .legend(),
+                        widget::column!(
+                            widget::text::title4(&net.name),
+                            widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("receiving")),
+                                    widget::text::heading(format!(
+                                        "{}/s",
+                                        humansize::format_size(net.rx as u64, humansize::DECIMAL)
+                                    ))
+                                ),
+                                widget::column!(
+                                    widget::text::body(fl!("sending")),
+                                    widget::text::heading(format!(
+                                        "{}/s",
+                                        humansize::format_size(net.tx as u64, humansize::DECIMAL)
+                                    ))
+                                ),
+                            )
+                            .spacing(space_m),
+                            widget::responsive(move |size| {
+                                let mut graphs = Vec::with_capacity(2);
+                                for (title, graph_kind) in [
+                                    (fl!("receiving"), GraphKind::NetworkRx(&net.name)),
+                                    (fl!("sending"), GraphKind::NetworkTx(&net.name)),
+                                ] {
+                                    graphs.push(Element::from(
+                                        widget::column!(
+                                            widget::text::title4(title),
+                                            canvas(
+                                                Graph::new(graph_kind, &self.graph_history)
+                                                    .legend(),
+                                            )
+                                            .height(LARGE_GRAPH_HEIGHT)
+                                            .width(Length::Fill)
+                                        )
+                                        .spacing(space_xxs),
+                                    ));
+                                }
+                                if size.width > 800.0 {
+                                    Element::from(widget::row(graphs))
+                                } else {
+                                    Element::from(widget::column(graphs))
+                                }
+                            })
                         )
-                        .height(300.0)
-                        .width(Length::Fill),
+                        .spacing(space_xxs),
                     );
-                    column = column.push(widget::text(format!(
-                        "Tx: {}/s",
-                        humansize::format_size(net.tx as u64, humansize::DECIMAL)
-                    )));
-                    column = column.push(
-                        canvas(
-                            Graph::new(GraphKind::NetworkTx(&net.name), &self.graph_history)
-                                .legend(),
-                        )
-                        .height(300.0)
-                        .width(Length::Fill),
-                    );
-                    column = column.push(widget::space().height(20.0));
                 }
                 column.into()
             }
             _ => widget::indeterminate_circular().into(),
         };
-        widget::column!(
-            page_header,
-            widget::scrollable(
-                widget::container(content)
-                    .padding([0, space_xl])
-                    .width(Length::Fill)
+        let content = widget::mouse_area(
+            widget::column!(
+                page_header,
+                widget::scrollable(
+                    widget::container(content)
+                        .padding([0, space_xl, space_s, space_xl])
+                        .width(Length::Fill)
+                )
+                .width(Length::Fill),
             )
-            .width(Length::Fill),
+            .width(Length::Fill)
+            .height(Length::Fill),
         )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .on_press(Message::ProcessSelect(None));
+        if let Some(id) = self.nav_model.active_data::<widget::Id>() {
+            widget::id_container(content, id.clone()).into()
+        } else {
+            content.into()
+        }
     }
 
     fn system_theme_update(

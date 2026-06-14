@@ -1,6 +1,9 @@
-use freedesktop_desktop_entry::{DesktopEntry, Iter, default_paths, get_languages_from_env};
+use freedesktop_desktop_entry::{
+    DesktopEntry, Iter, default_paths, get_languages_from_env, group_entry_from_path,
+};
 use libc::c_uint;
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -9,7 +12,7 @@ use std::{
 };
 use sysinfo::{Components, Disk, Pid, Process, System};
 
-use super::{AppEntry, GpuId, GpuItem, Platform};
+use super::{AppEntry, DiskItem, GpuId, GpuItem, Platform};
 
 use fdinfo::FdInfo;
 mod fdinfo;
@@ -172,9 +175,17 @@ impl LinuxPlatform {
                 id,
                 icon,
                 name: app.full_name(&locales).map(|x| x.to_string()),
+                no_display: app.no_display(),
                 args,
             }));
         }
+
+        // Sort no_display below
+        app_entries.sort_by(|a, b| match (a.no_display, b.no_display) {
+            (false, true) => Ordering::Less,
+            (true, false) => Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        });
 
         Self {
             amdgpu_ids,
@@ -188,11 +199,68 @@ impl LinuxPlatform {
             version: 0,
         }
     }
+
+    fn update_disk(&self, disk: &Disk, item: &mut DiskItem, components: &Components) -> Option<()> {
+        let orig_dev_path = disk.name();
+        let virt_dev_path = fs::canonicalize(&orig_dev_path).ok()?;
+        let virt_dev_name = virt_dev_path.strip_prefix("/dev/").ok()?.to_string_lossy();
+        let dev_path = resolve_to_physical(&virt_dev_name).unwrap_or(virt_dev_path);
+        let dev_name = dev_path.strip_prefix("/dev/").ok()?;
+        let sys_class_path = Path::new("/sys/class/block").join(&dev_name);
+        let mut sys_path = fs::canonicalize(&sys_class_path).ok()?;
+        // Partitions will be nested inside disk, which is inside device, which is inside subsystem
+        // /sys/devices/.../nvme/nvme0/nvme0n1/nvme0n1p1
+        for _depth in 0..3 {
+            let model_path = sys_path.join("model");
+            let Ok(model_data) = fs::read_to_string(&model_path) else {
+                sys_path = sys_path.parent()?.to_path_buf();
+                continue;
+            };
+            let model = model_data.trim();
+            item.name = if orig_dev_path != dev_path {
+                format!(
+                    "{} ({} on {})",
+                    model,
+                    orig_dev_path.display(),
+                    dev_path.display()
+                )
+            } else {
+                format!("{} ({})", model, dev_path.display())
+            };
+
+            // Look for hwmon temperature
+            for entry_res in fs::read_dir(&sys_path).ok()? {
+                let Ok(entry) = entry_res else { continue };
+                let file_name = entry.file_name();
+                let Some(file_name) = file_name.to_str() else {
+                    continue;
+                };
+                if file_name.starts_with("hwmon") {
+                    for component in components {
+                        let Some(id) = component.id() else { continue };
+                        let Some((hwmon, _index)) = id.split_once('_') else {
+                            continue;
+                        };
+                        if hwmon != file_name {
+                            continue;
+                        }
+                        let Some(temp) = component.temperature() else {
+                            continue;
+                        };
+                        item.temp = Some(item.temp.map_or(temp, |x| temp.max(x)));
+                    }
+                }
+            }
+
+            return Some(());
+        }
+        None
+    }
 }
 
 impl Platform for LinuxPlatform {
-    fn refresh(&mut self, components: &Components, refresh_processes: bool) {
-        self.nvml.refresh(components, refresh_processes);
+    fn refresh(&mut self, refresh_processes: bool, components: &Components) {
+        self.nvml.refresh(refresh_processes, components);
 
         // Refreshed first so total Intel GPU metrics can be calculated
         if refresh_processes {
@@ -314,7 +382,7 @@ impl Platform for LinuxPlatform {
                     for entry_res in entries {
                         let Ok(entry) = entry_res else { continue };
                         let file_name = entry.file_name();
-                        let Some(file_name_str) = file_name.to_str() else {
+                        let Some(file_name) = file_name.to_str() else {
                             continue;
                         };
                         for component in components {
@@ -322,7 +390,7 @@ impl Platform for LinuxPlatform {
                             let Some((hwmon, _index)) = id.split_once('_') else {
                                 continue;
                             };
-                            if hwmon != file_name_str {
+                            if hwmon != file_name {
                                 continue;
                             }
                             let Some(temp) = component.temperature() else {
@@ -372,35 +440,10 @@ impl Platform for LinuxPlatform {
         }
     }
 
-    fn disk_name(&self, disk: &Disk) -> Option<String> {
-        let orig_dev_path = disk.name();
-        let virt_dev_path = fs::canonicalize(&orig_dev_path).ok()?;
-        let virt_dev_name = virt_dev_path.strip_prefix("/dev/").ok()?.to_string_lossy();
-        let dev_path = resolve_to_physical(&virt_dev_name).unwrap_or(virt_dev_path);
-        let dev_name = dev_path.strip_prefix("/dev/").ok()?;
-        let sys_class_path = Path::new("/sys/class/block").join(&dev_name);
-        let mut sys_path = fs::canonicalize(&sys_class_path).ok()?;
-        // Partitions will be nested inside disk, which is inside device, which is inside subsystem
-        // /sys/devices/.../nvme/nvme0/nvme0n1/nvme0n1p1
-        for _depth in 0..3 {
-            let model_path = sys_path.join("model");
-            let Ok(model_data) = fs::read_to_string(&model_path) else {
-                sys_path = sys_path.parent()?.to_path_buf();
-                continue;
-            };
-            let model = model_data.trim();
-            if orig_dev_path != dev_path {
-                return Some(format!(
-                    "{} ({} on {})",
-                    model,
-                    orig_dev_path.display(),
-                    dev_path.display()
-                ));
-            } else {
-                return Some(format!("{} ({})", model, dev_path.display()));
-            }
-        }
-        None
+    fn disk_item(&self, disk: &Disk, refresh: Duration, components: &Components) -> DiskItem {
+        let mut item = DiskItem::new(disk, refresh);
+        self.update_disk(disk, &mut item, components);
+        item
     }
 
     fn gpus(&self) -> Vec<GpuItem> {
@@ -412,6 +455,23 @@ impl Platform for LinuxPlatform {
         //TODO: maximum depth for parent app search?
         loop {
             let proc_args = process.cmd();
+
+            // Handle flatpaks
+            match group_entry_from_path(
+                format!("/proc/{}/root/.flatpak-info", process.pid()),
+                "Application",
+                "name",
+            ) {
+                Ok(Some(name)) => {
+                    for app in self.app_entries.iter() {
+                        if app.id == name {
+                            return Some(app.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             let proc_cmd = proc_args.get(0).and_then(|x| x.to_str())?;
             let proc_exe = process.exe().and_then(|x| x.to_str())?;
             for app in self.app_entries.iter() {

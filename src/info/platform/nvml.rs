@@ -96,7 +96,7 @@ impl NvmlPlatform {
 }
 
 impl Platform for NvmlPlatform {
-    fn refresh(&mut self, _components: &Components, processes: bool) {
+    fn refresh(&mut self, processes: bool, _components: &Components) {
         //TODO: log error?
         let _ = self.refresh_inner(processes);
     }
