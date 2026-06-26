@@ -10,6 +10,10 @@ use cosmic::{
     iced::{
         self, Alignment, Border, Length, Limits, Size, Subscription,
         core::text::{Ellipsize, EllipsizeHeightLimit, Shaping},
+        widget::{
+            operation::AbsoluteOffset,
+            scrollable::{Direction, Scrollbar, Viewport, scroll_to},
+        },
     },
     surface, theme,
     widget::{
@@ -132,7 +136,7 @@ fn table_header(
     sort_category: ProcessCategory,
     sort_direction: bool,
     sortable: bool,
-) -> Element<'static, Message> {
+) -> widget::Row<'static, Message, cosmic::Theme> {
     let mut header = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
     for &category in categories {
         let mut cat_row = widget::row::with_capacity(2).align_y(Alignment::Center);
@@ -160,7 +164,7 @@ fn table_header(
             header = header.push(container);
         }
     }
-    header.into()
+    header
 }
 
 fn table_row<'a>(
@@ -269,6 +273,8 @@ pub enum Message {
     ProcessSearch(String),
     ProcessSelect(Option<Pid>),
     ProcessSort(ProcessCategory),
+    ScrollHeader(Viewport),
+    ScrollTable(Viewport),
     SeeAllProcesses(bool, ProcessCategory, bool),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
     Surface(surface::Action),
@@ -343,6 +349,8 @@ pub struct App {
     process_search: (String, Option<Regex>),
     process_selected: Option<Pid>,
     process_sort: (ProcessCategory, bool),
+    scroll_header_id: widget::Id,
+    scroll_table_id: widget::Id,
 }
 
 impl App {
@@ -975,6 +983,8 @@ impl Application for App {
             process_search: (String::new(), None),
             process_selected: None,
             process_sort: (ProcessCategory::default(), false),
+            scroll_header_id: widget::Id::unique(),
+            scroll_table_id: widget::Id::unique(),
         };
 
         let command = Task::batch([app.update_config(), app.set_window_title(fl!("app-name"))]);
@@ -1126,6 +1136,26 @@ impl Application for App {
                     self.process_sort.1 = false;
                 }
                 self.update_snapshot();
+            }
+            Message::ScrollHeader(scroll) => {
+                // Sync header horizontal scroll to table
+                return scroll_to(
+                    self.scroll_table_id.clone(),
+                    AbsoluteOffset {
+                        x: Some(scroll.absolute_offset().x),
+                        y: None,
+                    },
+                );
+            }
+            Message::ScrollTable(scroll) => {
+                // Sync table horizontal scroll to header
+                return scroll_to(
+                    self.scroll_header_id.clone(),
+                    AbsoluteOffset {
+                        x: Some(scroll.absolute_offset().x),
+                        y: None,
+                    },
+                );
             }
             Message::SeeAllProcesses(show_apps, category, direction) => {
                 self.process_sort = (category, direction);
@@ -1324,24 +1354,68 @@ impl Application for App {
                     )
                     .push(widget::space().height(space_m));
 
-                //TODO: table is too slow, this uses list to emulate table
-                let categories = match nav_page {
-                    NavPage::Applications => ProcessCategory::for_applications(self.process_sort.0),
-                    _ => ProcessCategory::for_processes(self.process_sort.0),
+                let responsive = widget::responsive(move |size| {
+                    //TODO: table is too slow, this uses list to emulate table
+                    let categories = match nav_page {
+                        NavPage::Applications => {
+                            ProcessCategory::for_applications(self.process_sort.0)
+                        }
+                        _ => ProcessCategory::for_processes(self.process_sort.0),
+                    };
+                    let (width, direction) = if size.width < 1000.0 {
+                        (
+                            1000.0,
+                            Direction::Both {
+                                vertical: Scrollbar::new(),
+                                horizontal: Scrollbar::new(),
+                            },
+                        )
+                    } else {
+                        (size.width, Direction::Vertical(Scrollbar::new()))
+                    };
+                    let header =
+                        table_header(&categories, self.process_sort.0, self.process_sort.1, true);
+                    widget::column!(
+                        iced::widget::scrollable(
+                            header.padding([0, space_xl, 0, space_xl]).width(width),
+                        )
+                        .direction(Direction::Horizontal(Scrollbar::hidden()))
+                        .id(self.scroll_header_id.clone())
+                        .on_scroll(Message::ScrollHeader)
+                        .width(Length::Fill),
+                        widget::scrollable(
+                            widget::container(iced::widget::List::new(
+                                &self.process_content,
+                                move |_i, item| {
+                                    widget::column::with_capacity(2)
+                                        .push(widget::divider::horizontal::default())
+                                        .push(table_row(item, &categories, &self.process_selected))
+                                        .into()
+                                },
+                            ))
+                            .padding([0, space_xl, 0, space_xl])
+                            .width(width),
+                        )
+                        .direction(direction)
+                        .id(self.scroll_table_id.clone())
+                        .on_scroll(Message::ScrollTable)
+                    )
+                    .padding([0, 0, space_xxs, 0])
+                    .into()
+                });
+
+                // Custom view for horizontal scrolling
+                let content = widget::mouse_area(
+                    widget::column!(page_header, responsive,)
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .on_press(Message::ProcessSelect(None));
+                return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
+                    widget::id_container(content, id.clone()).into()
+                } else {
+                    content.into()
                 };
-                page_header = page_header.push(table_header(
-                    &categories,
-                    self.process_sort.0,
-                    self.process_sort.1,
-                    true,
-                ));
-                iced::widget::List::new(&self.process_content, move |_i, item| {
-                    widget::column::with_capacity(2)
-                        .push(widget::divider::horizontal::default())
-                        .push(table_row(item, &categories, &self.process_selected))
-                        .into()
-                })
-                .into()
             }
             (NavPage::Cpu, Some(graph_item)) => {
                 let mut column = widget::column::with_capacity(2)
