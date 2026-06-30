@@ -1,3 +1,9 @@
+cosmic-monitor (1.2.0) noble; urgency=medium
+
+  * Epoch 1.2.0 version update
+
+ -- Jeremy Soller <jeremy@system76.com>  Tue, 30 Jun 2026 12:21:20 -0600
+
 cosmic-monitor (0.1.0) noble; urgency=medium
 
   * Initial release.
