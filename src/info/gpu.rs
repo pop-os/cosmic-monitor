@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum GpuId {
     Other(u32),
@@ -27,11 +29,20 @@ impl GpuId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GpuState {
+    Normal,
+    Idle(Instant),
+    Suspended,
+}
+
 #[derive(Clone, Debug)]
 pub struct GpuItem {
     pub boot_vga: bool,
     pub id: GpuId,
     pub name: String,
+    pub state: GpuState,
+    pub power: Option<f32>,
     pub usage: Option<f32>,
     pub temp: Option<f32>,
     pub vram_used: Option<u64>,

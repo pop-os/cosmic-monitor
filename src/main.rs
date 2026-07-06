@@ -43,7 +43,7 @@ mod config;
 use graph::{Graph, GraphKind};
 mod graph;
 
-use info::{GpuId, GraphItem, ProcessCategory, ProcessItem};
+use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
 mod info;
 
 mod localize;
@@ -1626,23 +1626,33 @@ impl Application for App {
                         column = column.push(self.responsive_graph_top_processes(
                             ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
                             move || {
+                                let mut row = widget::row::with_capacity(3).spacing(space_m);
+                                row = row.push(widget::column!(
+                                    widget::text::body(fl!("utilization")),
+                                    widget::text::heading(format!("{:.1}%", usage))
+                                ));
+                                if let Some(power) = gpu.power {
+                                    row = row.push(widget::column!(
+                                        widget::text::body(fl!("power")),
+                                        widget::text::heading(format!("{:.1}W", power))
+                                    ));
+                                }
+                                if let Some(temp) = gpu.temp {
+                                    row = row.push(widget::column!(
+                                        widget::text::body(fl!("temperature")),
+                                        widget::text::heading(format!("{:.1}°C", temp))
+                                    ));
+                                }
                                 widget::column!(
-                                    widget::text::title4(fl!("gpu-utilization")),
-                                    widget::row!(
-                                        widget::column!(
-                                            widget::text::body(fl!("utilization")),
-                                            widget::text::heading(format!("{:.1}%", usage))
+                                    widget::text::title4(match gpu.state {
+                                        GpuState::Normal => fl!("gpu-utilization"),
+                                        GpuState::Idle(instant) => fl!(
+                                            "gpu-utilization-idle",
+                                            seconds = instant.elapsed().as_secs()
                                         ),
-                                        if let Some(temp) = gpu.temp {
-                                            widget::column!(
-                                                widget::text::body(fl!("temperature")),
-                                                widget::text::heading(format!("{:.1}°C", temp))
-                                            )
-                                        } else {
-                                            widget::column!()
-                                        }
-                                    )
-                                    .spacing(space_m),
+                                        GpuState::Suspended => fl!("gpu-utilization-suspended"),
+                                    }),
+                                    row,
                                     canvas(
                                         Graph::new(
                                             GraphKind::GpuUsage(gpu.id),

@@ -12,7 +12,7 @@ use std::{
 };
 use sysinfo::{Components, Disk, Pid, Process, System};
 
-use super::{AppEntry, DiskItem, GpuId, GpuItem, Platform};
+use crate::info::{AppEntry, DiskItem, GpuId, GpuItem, GpuState, Platform};
 
 use fdinfo::FdInfo;
 mod fdinfo;
@@ -353,7 +353,8 @@ impl Platform for LinuxPlatform {
                     boot_vga: false,
                     id: id_opt.unwrap_or(GpuId::Other(id)),
                     name,
-                    //TODO: find GPU temp
+                    state: GpuState::Normal,
+                    power: None,
                     temp: None,
                     usage: None,
                     vram_used: None,
@@ -439,6 +440,8 @@ impl Platform for LinuxPlatform {
                 if gpu.id == nvml_gpu.id {
                     // Copy fields that NVML will know better than DRM
                     gpu.name = nvml_gpu.name;
+                    gpu.state = nvml_gpu.state;
+                    gpu.power = nvml_gpu.power;
                     gpu.temp = nvml_gpu.temp;
                     gpu.usage = nvml_gpu.usage;
                     gpu.vram_used = nvml_gpu.vram_used;

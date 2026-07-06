@@ -8,11 +8,10 @@ use std::{
 };
 use sysinfo::{Components, Pid};
 
-use super::{GpuId, GpuItem, Platform};
+use crate::info::{GpuId, GpuItem, GpuState, Platform};
 
 pub struct NvmlPlatform {
     gpu_items: Vec<GpuItem>,
-    no_processes_time: Option<Instant>,
     last_seen_timestamp: Option<u64>,
     nvml: Option<Nvml>,
     processes: HashMap<Pid, HashMap<GpuId, (f32, u64)>>,
@@ -23,7 +22,6 @@ impl NvmlPlatform {
         Self {
             gpu_items: Vec::new(),
             last_seen_timestamp: None,
-            no_processes_time: None,
             //TODO: only use NVML if GPU is awake
             //TODO: log error?
             nvml: Nvml::init().ok(),
@@ -35,8 +33,8 @@ impl NvmlPlatform {
         // Check if any GPUs are suspended before reading info. This is currently Linux-only
         #[cfg(target_os = "linux")]
         {
-            let mut any_suspended = false;
-            for gpu in self.gpu_items.iter() {
+            let mut skip_refresh = false;
+            for gpu in self.gpu_items.iter_mut() {
                 match gpu.id {
                     GpuId::Pci {
                         domain,
@@ -51,7 +49,11 @@ impl NvmlPlatform {
                         match fs::read_to_string(&runtime_status_path) {
                             Ok(data) => {
                                 if data.trim() == "suspended" {
-                                    any_suspended = true;
+                                    gpu.state = GpuState::Suspended;
+                                    skip_refresh = true;
+                                    continue;
+                                } else if matches!(gpu.state, GpuState::Suspended) {
+                                    gpu.state = GpuState::Normal;
                                 }
                             }
                             Err(err) => {
@@ -62,26 +64,31 @@ impl NvmlPlatform {
                     _ => {}
                 }
                 //TODO: cache per-gpu process count?
-                if self
+                if !self
                     .processes
                     .iter()
                     .any(|(_pid, usages)| usages.contains_key(&gpu.id))
                 {
-                    let elapsed = match self.no_processes_time {
-                        Some(instant) => instant.elapsed(),
-                        None => {
-                            self.no_processes_time = Some(Instant::now());
+                    let elapsed = match gpu.state {
+                        GpuState::Normal => {
+                            gpu.state = GpuState::Idle(Instant::now());
                             Duration::ZERO
+                        }
+                        GpuState::Idle(instant) => instant.elapsed(),
+                        GpuState::Suspended => {
+                            // Should be handled above
+                            continue;
                         }
                     };
                     if elapsed.as_secs() < 30 {
                         // Only pretend it is suspended for 30 seconds, then try again
-                        any_suspended = true;
+                        skip_refresh = true;
+                    } else {
+                        gpu.state = GpuState::Idle(Instant::now());
                     }
                 }
             }
-            if any_suspended {
-                self.no_processes_time = None;
+            if skip_refresh {
                 //TODO: Data is now stale!
                 return Ok(());
             }
@@ -109,6 +116,7 @@ impl NvmlPlatform {
                 //TODO: would this ever be non-zero?
                 func: 0,
             };
+            let power = (device.power_usage()? as f32) / 1000.0;
             let temp = device.temperature(TemperatureSensor::Gpu)?;
             let util = device.utilization_rates()?;
 
@@ -116,6 +124,8 @@ impl NvmlPlatform {
                 boot_vga: false,
                 id: gpu_id,
                 name,
+                state: GpuState::Normal,
+                power: Some(power as f32),
                 temp: Some(temp as f32),
                 usage: Some(util.gpu as f32),
                 vram_used: Some(memory_info.used),
