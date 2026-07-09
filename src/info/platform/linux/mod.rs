@@ -12,7 +12,7 @@ use std::{
 };
 use sysinfo::{Components, Disk, Pid, Process, System};
 
-use super::{AppEntry, DiskItem, GpuId, GpuItem, Platform};
+use crate::info::{AppEntry, DiskItem, GpuId, GpuItem, GpuState, Platform};
 
 use fdinfo::FdInfo;
 mod fdinfo;
@@ -353,7 +353,8 @@ impl Platform for LinuxPlatform {
                     boot_vga: false,
                     id: id_opt.unwrap_or(GpuId::Other(id)),
                     name,
-                    //TODO: find GPU temp
+                    state: GpuState::Normal,
+                    power: None,
                     temp: None,
                     usage: None,
                     vram_used: None,
@@ -376,6 +377,35 @@ impl Platform for LinuxPlatform {
                 //TODO: mem_info_vram_total is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("mem_info_vram_total")) {
                     gpu_item.vram_total = data.trim().parse().ok();
+                } else {
+                    // Try to find largest prefetchable memory BAR and assume that is VRAM
+                    if let Ok(data) = fs::read_to_string(device_path.join("resource")) {
+                        for line in data.lines() {
+                            let mut parts = line.split(" ");
+                            let parse_hex = |string: &str| -> Option<u64> {
+                                u64::from_str_radix(string.trim_start_matches("0x"), 16).ok()
+                            };
+                            let Some(start) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+                            let Some(end) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+                            let Some(flags) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+
+                            const IORESOURCE_MEM: u64 = 0x00000200;
+                            const IORESOURCE_PREFETCH: u64 = 0x00002000;
+                            if (flags & (IORESOURCE_MEM | IORESOURCE_PREFETCH))
+                                == (IORESOURCE_MEM | IORESOURCE_PREFETCH)
+                            {
+                                let len = (end + 1) - start;
+                                gpu_item.vram_total =
+                                    Some(gpu_item.vram_total.unwrap_or(0).max(len));
+                            }
+                        }
+                    }
                 };
 
                 if let Ok(entries) = fs::read_dir(device_path.join("hwmon")) {
@@ -410,6 +440,8 @@ impl Platform for LinuxPlatform {
                 if gpu.id == nvml_gpu.id {
                     // Copy fields that NVML will know better than DRM
                     gpu.name = nvml_gpu.name;
+                    gpu.state = nvml_gpu.state;
+                    gpu.power = nvml_gpu.power;
                     gpu.temp = nvml_gpu.temp;
                     gpu.usage = nvml_gpu.usage;
                     gpu.vram_used = nvml_gpu.vram_used;

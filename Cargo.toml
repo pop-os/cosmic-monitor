@@ -45,7 +45,7 @@ features = ["about", "surface-message", "tokio", "winit"]
 xdgen = "0.1"
 
 [features]
-default = ["dbus-config", "nvml", "wgpu", "wayland"]
+default = ["dbus-config", "nvml", "wayland", "wgpu"]
 dbus-config = ["libcosmic/dbus-config"]
 nvml = ["dep:nvml-wrapper"]
 wgpu = ["libcosmic/wgpu"]

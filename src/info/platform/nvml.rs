@@ -1,10 +1,14 @@
 use nvml_wrapper::{
     Nvml, enum_wrappers::device::TemperatureSensor, enums::device::UsedGpuMemory, error::NvmlError,
 };
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    time::{Duration, Instant},
+};
 use sysinfo::{Components, Pid};
 
-use super::{GpuId, GpuItem, Platform};
+use crate::info::{GpuId, GpuItem, GpuState, Platform};
 
 pub struct NvmlPlatform {
     gpu_items: Vec<GpuItem>,
@@ -26,15 +30,87 @@ impl NvmlPlatform {
     }
 
     fn refresh_inner(&mut self, refresh_processes: bool) -> Result<(), NvmlError> {
-        let Some(nvml) = &self.nvml else {
-            return Ok(());
-        };
+        // Check if any GPUs are suspended before reading info. This is currently Linux-only
+        #[cfg(target_os = "linux")]
+        {
+            let mut skip_refresh = false;
+            for gpu in self.gpu_items.iter_mut() {
+                match gpu.id {
+                    GpuId::Pci {
+                        domain,
+                        bus,
+                        device,
+                        func,
+                    } => {
+                        let runtime_status_path = format!(
+                            "/sys/bus/pci/devices/{:04x}:{:02x}:{:02x}.{:01x}/power/runtime_status",
+                            domain, bus, device, func,
+                        );
+                        match fs::read_to_string(&runtime_status_path) {
+                            Ok(data) => {
+                                if data.trim() == "suspended" {
+                                    gpu.state = GpuState::Suspended;
+                                    skip_refresh = true;
+                                    continue;
+                                } else if matches!(gpu.state, GpuState::Suspended) {
+                                    gpu.state = GpuState::Normal;
+                                }
+                            }
+                            Err(err) => {
+                                log::debug!("failed to read {}: {}", runtime_status_path, err);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                //TODO: cache per-gpu process count?
+                if !self
+                    .processes
+                    .iter()
+                    .any(|(_pid, usages)| usages.contains_key(&gpu.id))
+                {
+                    let elapsed = match gpu.state {
+                        GpuState::Normal => {
+                            gpu.state = GpuState::Idle(Instant::now());
+                            Duration::ZERO
+                        }
+                        GpuState::Idle(instant) => instant.elapsed(),
+                        GpuState::Suspended => {
+                            // Should be handled above
+                            continue;
+                        }
+                    };
+                    if elapsed.as_secs() < 30 {
+                        // Only pretend it is suspended for 30 seconds, then try again
+                        skip_refresh = true;
+                    } else {
+                        gpu.state = GpuState::Idle(Instant::now());
+                    }
+                }
+            }
+            if skip_refresh {
+                // Data is now stale!
+                for gpu in self.gpu_items.iter_mut() {
+                    // This zeroes GPU usage so the graphs are not broken
+                    gpu.usage = Some(0.0);
+                    gpu.vram_used = Some(0);
+                    // Other unknown values are cleared
+                    gpu.power = None;
+                    gpu.temp = None;
+                }
+                return Ok(());
+            }
+        }
 
         self.gpu_items.clear();
 
         if refresh_processes {
             self.processes.clear();
         }
+
+        let Some(nvml) = &self.nvml else {
+            return Ok(());
+        };
 
         for index in 0..nvml.device_count()? {
             let device = nvml.device_by_index(index)?;
@@ -48,6 +124,7 @@ impl NvmlPlatform {
                 //TODO: would this ever be non-zero?
                 func: 0,
             };
+            let power = (device.power_usage()? as f32) / 1000.0;
             let temp = device.temperature(TemperatureSensor::Gpu)?;
             let util = device.utilization_rates()?;
 
@@ -55,6 +132,8 @@ impl NvmlPlatform {
                 boot_vga: false,
                 id: gpu_id,
                 name,
+                state: GpuState::Normal,
+                power: Some(power as f32),
                 temp: Some(temp as f32),
                 usage: Some(util.gpu as f32),
                 vram_used: Some(memory_info.used),
