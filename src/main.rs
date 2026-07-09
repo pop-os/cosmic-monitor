@@ -1628,13 +1628,7 @@ impl Application for App {
                             move || {
                                 let (title, show_data) = match gpu.state {
                                     GpuState::Normal => (fl!("gpu-utilization"), true),
-                                    GpuState::Idle(instant) => (
-                                        fl!(
-                                            "gpu-utilization-idle",
-                                            seconds = instant.elapsed().as_secs()
-                                        ),
-                                        false,
-                                    ),
+                                    GpuState::Idle(_) => (fl!("gpu-utilization-idle"), false),
                                     GpuState::Suspended => {
                                         (fl!("gpu-utilization-suspended"), false)
                                     }

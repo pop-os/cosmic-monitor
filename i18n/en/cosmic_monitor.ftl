@@ -47,7 +47,7 @@ total-utilization = Total utilization
 
 ## GPU
 gpu-utilization = GPU Utilization
-gpu-utilization-idle = GPU Utilization - Idle for {$seconds}s
+gpu-utilization-idle = GPU Utilization - Idle
 gpu-utilization-suspended = GPU Utilization - Suspended
 no-gpus = No supported GPUs found.
 power = Power
