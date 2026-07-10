@@ -31,7 +31,7 @@ impl GpuId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GpuState {
-    Normal,
+    Active,
     Idle(Instant),
     Suspended,
 }

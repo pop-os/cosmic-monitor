@@ -481,6 +481,7 @@ impl App {
             &self.processes
         }
         .iter()
+        .filter(|x| !x.text(sort_category).is_empty())
         .k_smallest_by(count, |a, b| {
             if sort_direction {
                 b.compare(a, sort_category)
@@ -588,9 +589,8 @@ impl App {
                             column = column
                                 .push(widget::divider::horizontal::default())
                                 .push(widget::text::body(match gpu.state {
-                                    GpuState::Normal => String::new(),
-                                    GpuState::Idle(_) => fl!("gpu-idle-description"),
                                     GpuState::Suspended => fl!("gpu-suspended-description"),
+                                    _ => String::new(),
                                 }))
                                 .push(widget::divider::horizontal::default());
                         }
@@ -733,7 +733,7 @@ impl App {
         for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
                 let (caption, process_category) = match gpu.state {
-                    GpuState::Normal => (
+                    GpuState::Active | GpuState::Idle(_) => (
                         if let Some(temp) = gpu.temp {
                             format!("{:.1}% / {:.1}°C", usage, temp)
                         } else {
@@ -741,7 +741,6 @@ impl App {
                         },
                         Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
                     ),
-                    GpuState::Idle(_) => (fl!("gpu-idle-title"), None),
                     GpuState::Suspended => (fl!("gpu-suspended-title"), None),
                 };
                 items.push(card(
@@ -756,7 +755,7 @@ impl App {
             if let Some(vram_used) = gpu.vram_used {
                 if let Some(vram_total) = gpu.vram_total {
                     let (caption, process_category) = match gpu.state {
-                        GpuState::Normal => (
+                        GpuState::Active | GpuState::Idle(_) => (
                             format!(
                                 "{:.1}% / {}",
                                 100.0 * (vram_used as f32) / (vram_total as f32),
@@ -764,7 +763,6 @@ impl App {
                             ),
                             Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
                         ),
-                        GpuState::Idle(_) => (fl!("gpu-idle-title"), None),
                         GpuState::Suspended => (fl!("gpu-suspended-title"), None),
                     };
                     items.push(card(
@@ -1657,7 +1655,7 @@ impl Application for App {
                         .push(widget::space().height(space_m));
                     let mut column = widget::column::with_capacity(2).spacing(space_l);
                     match gpu.state {
-                        GpuState::Normal => {
+                        GpuState::Active | GpuState::Idle(_) => {
                             if let Some(usage) = gpu.usage {
                                 // GPU utilization and top processes
                                 column = column.push(self.responsive_graph_top_processes(
@@ -1748,12 +1746,6 @@ impl Application for App {
                                     ));
                                 }
                             }
-                        }
-                        GpuState::Idle(_) => {
-                            column = column.push(widget::column!(
-                                widget::text::title4(fl!("gpu-idle-title")),
-                                widget::text::body(fl!("gpu-idle-description"))
-                            ));
                         }
                         GpuState::Suspended => {
                             column = column.push(widget::column!(

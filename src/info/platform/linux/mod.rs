@@ -353,7 +353,7 @@ impl Platform for LinuxPlatform {
                     boot_vga: false,
                     id: id_opt.unwrap_or(GpuId::Other(id)),
                     name,
-                    state: GpuState::Normal,
+                    state: GpuState::Active,
                     power: None,
                     temp: None,
                     usage: None,

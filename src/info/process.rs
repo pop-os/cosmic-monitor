@@ -308,6 +308,7 @@ impl ProcessItem {
     }
 
     pub fn generate_strings(&mut self) {
+        self.strings.clear();
         self.strings.insert(
             ProcessCategory::CPU,
             format!("{}.{}%", self.cpu_usage / 10, self.cpu_usage % 10),
