@@ -33,6 +33,7 @@ use std::{
     collections::{HashMap, VecDeque},
     env,
     error::Error,
+    fmt::Write as _,
     time::{Duration, Instant},
 };
 use sysinfo::Pid;
@@ -690,9 +691,9 @@ impl App {
             GraphKind::Memory,
             fl!("memory"),
             format!(
-                "{:.1}% / {}",
-                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
+                "{} ({:.1}%)",
                 humansize::format_size(graph_item.memory.used, humansize::BINARY),
+                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
             ),
             format!(
                 "{}",
@@ -733,14 +734,19 @@ impl App {
         for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
                 let (caption, process_category) = match gpu.state {
-                    GpuState::Active | GpuState::Idle(_) => (
+                    GpuState::Active | GpuState::Idle(_) => {
+                        let mut caption = format!("{:.1}%", usage);
+                        if let Some(power) = gpu.power {
+                            let _ = write!(caption, " / {:.1}W", power);
+                        }
                         if let Some(temp) = gpu.temp {
-                            format!("{:.1}% / {:.1}°C", usage, temp)
-                        } else {
-                            format!("{:.1}%", usage)
-                        },
-                        Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
-                    ),
+                            let _ = write!(caption, " / {:.1}°C", temp);
+                        }
+                        (
+                            caption,
+                            Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
+                        )
+                    }
                     GpuState::Suspended => (fl!("gpu-suspended-title"), None),
                 };
                 items.push(card(
@@ -757,9 +763,10 @@ impl App {
                     let (caption, process_category) = match gpu.state {
                         GpuState::Active | GpuState::Idle(_) => (
                             format!(
-                                "{:.1}% / {}",
-                                100.0 * (vram_used as f32) / (vram_total as f32),
+                                "{} ({:.1}%) / {}",
                                 humansize::format_size(vram_used, humansize::BINARY),
+                                100.0 * (vram_used as f32) / (vram_total as f32),
+                                humansize::format_size(vram_total, humansize::BINARY),
                             ),
                             Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
                         ),

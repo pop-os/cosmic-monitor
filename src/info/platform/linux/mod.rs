@@ -125,6 +125,7 @@ impl LinuxProcess {
 pub struct LinuxPlatform {
     amdgpu_ids: HashMap<(u16, u8), String>,
     app_entries: Vec<Arc<AppEntry>>,
+    gpu_energies: HashMap<GpuId, (Instant, u64)>,
     gpu_items: Vec<GpuItem>,
     nvml: Box<dyn Platform>,
     processes: HashMap<Pid, LinuxProcess>,
@@ -190,6 +191,7 @@ impl LinuxPlatform {
         Self {
             amdgpu_ids,
             app_entries,
+            gpu_energies: HashMap::new(),
             gpu_items: Vec::new(),
             #[cfg(feature = "nvml")]
             nvml: Box::new(super::nvml::NvmlPlatform::new()),
@@ -411,6 +413,33 @@ impl Platform for LinuxPlatform {
                 if let Ok(entries) = fs::read_dir(device_path.join("hwmon")) {
                     for entry_res in entries {
                         let Ok(entry) = entry_res else { continue };
+
+                        // Check for power info
+                        if let Ok(data) = fs::read_to_string(entry.path().join("energy1_input")) {
+                            // Intel GPUs provide energy1_input
+                            if let Ok(microjoules) = data.trim().parse::<u64>() {
+                                let time = Instant::now();
+                                if let Some((last_time, last_microjoules)) =
+                                    self.gpu_energies.insert(gpu_item.id, (time, microjoules))
+                                {
+                                    if let Some(duration) = time.checked_duration_since(last_time) {
+                                        let microwatts = (microjoules.wrapping_sub(last_microjoules)
+                                            as f32)
+                                            / duration.as_secs_f32();
+                                        gpu_item.power = Some(microwatts / 1_000_000.0);
+                                    }
+                                }
+                            }
+                        } else if let Ok(data) =
+                            fs::read_to_string(entry.path().join("power1_average"))
+                        {
+                            // AMD GPUs provide power1_average
+                            if let Ok(microwatts) = data.trim().parse::<f32>() {
+                                gpu_item.power = Some(microwatts / 1_000_000.0);
+                            }
+                        }
+
+                        // Check for temperature from matching Component from sysinfo
                         let file_name = entry.file_name();
                         let Some(file_name) = file_name.to_str() else {
                             continue;
@@ -423,10 +452,9 @@ impl Platform for LinuxPlatform {
                             if hwmon != file_name {
                                 continue;
                             }
-                            let Some(temp) = component.temperature() else {
-                                continue;
-                            };
-                            gpu_item.temp = Some(gpu_item.temp.map_or(temp, |x| temp.max(x)));
+                            if let Some(temp) = component.temperature() {
+                                gpu_item.temp = Some(gpu_item.temp.map_or(temp, |x| temp.max(x)));
+                            }
                         }
                     }
                 }
