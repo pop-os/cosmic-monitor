@@ -108,7 +108,7 @@ impl LinuxProcess {
             for (name, vram) in fdinfo.residents.iter_mut() {
                 //TODO: figure out what each GPU driver uses for this name
                 match name.as_str() {
-                    "vram" => {
+                    "local0" | "system0" | "vram" => {
                         self.gpu_usages.entry(fdinfo.gpu_id).or_insert((0.0, 0)).1 += *vram;
                     }
                     _ => {}
