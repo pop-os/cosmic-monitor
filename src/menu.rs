@@ -5,17 +5,13 @@ use cosmic::{
     app::Core,
     theme,
     widget::{
-        self, Widget,
+        self,
         menu::{self, key_bind::KeyBind},
-        responsive_menu_bar,
     },
 };
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
 
 use crate::{Action, Config, Message, fl};
-
-static MENU_ID: LazyLock<cosmic::widget::Id> =
-    LazyLock::new(|| cosmic::widget::Id::new("responsive-menu"));
 
 pub fn menu_bar<'a>(
     core: &Core,

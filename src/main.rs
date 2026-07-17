@@ -8,13 +8,14 @@ use cosmic::{
     cosmic_config::{self, CosmicConfigEntry},
     cosmic_theme, executor,
     iced::{
-        self, Alignment, Border, Length, Limits, Size, Subscription,
+        self, Alignment, Border, Event, Length, Limits, Size, Subscription,
         core::text::{Ellipsize, EllipsizeHeightLimit, Shaping},
+        event,
         widget::{
             operation::AbsoluteOffset,
             scrollable::{Direction, Scrollbar, Viewport, scroll_to},
         },
-        window,
+        window::{self, Event as WindowEvent},
     },
     surface, theme,
     widget::{
@@ -172,7 +173,7 @@ fn table_header(
 fn table_row<'a>(
     item: &'a ProcessItem,
     categories: &[ProcessCategory],
-    selected: &Option<Pid>,
+    selected: &Option<SelectedItem>,
 ) -> Element<'a, Message> {
     let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
@@ -203,8 +204,8 @@ fn table_row<'a>(
         );
     }
     let mut container = widget::container(row);
-    //TODO: allow App selection
-    if selected.is_some() && selected == &item.pid {
+    let item_selected = item.as_selected();
+    if selected == &item_selected {
         container = container.style(|theme| {
             let cosmic = theme.cosmic();
             widget::container::Style {
@@ -219,7 +220,7 @@ fn table_row<'a>(
         });
     }
     widget::mouse_area(container)
-        .on_press(Message::ProcessSelect(item.pid))
+        .on_press(Message::Select(item_selected))
         .into()
 }
 
@@ -256,7 +257,16 @@ impl MenuAction for Action {
 
 #[derive(Clone, Debug)]
 pub enum DialogKind {
-    ProcessQuit { name: String, pid: Pid, force: bool },
+    AppQuit {
+        name: String,
+        processes: Vec<ProcessItem>,
+        force: bool,
+    },
+    ProcessQuit {
+        name: String,
+        pid: Pid,
+        force: bool,
+    },
 }
 
 /// Messages that are used specifically by our [`App`].
@@ -273,11 +283,12 @@ pub enum Message {
     LaunchUrl(String),
     NavPage(NavPage),
     ProcessSearch(String),
-    ProcessSelect(Option<Pid>),
     ProcessSort(ProcessCategory),
     ScrollHeader(Viewport),
     ScrollTable(Viewport),
     SeeAllProcesses(bool, ProcessCategory, bool),
+    Select(Option<SelectedItem>),
+    Size(window::Id, Size),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
     Surface(surface::Action),
     SystemThemeChange,
@@ -330,6 +341,12 @@ impl NavPage {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SelectedItem {
+    App(String),
+    Process(Pid),
+}
+
 /// The [`App`] stores application-specific state.
 pub struct App {
     about: About,
@@ -349,10 +366,11 @@ pub struct App {
     processes: Vec<ProcessItem>,
     process_content: iced::widget::list::Content<ProcessItem>,
     process_search: (String, Option<Regex>),
-    process_selected: Option<Pid>,
     process_sort: (ProcessCategory, bool),
     scroll_header_id: widget::Id,
     scroll_table_id: widget::Id,
+    selected: Option<SelectedItem>,
+    size: Option<Size>,
 }
 
 impl App {
@@ -493,7 +511,7 @@ impl App {
             column = column.push(
                 widget::column::with_capacity(2)
                     .push(widget::divider::horizontal::default())
-                    .push(table_row(item, &categories, &self.process_selected)),
+                    .push(table_row(item, &categories, &self.selected)),
             );
         }
         column = column.push(widget::divider::horizontal::default());
@@ -531,20 +549,22 @@ impl App {
 
         let card = |graph_kind,
                     name,
-                    data,
                     caption,
+                    data,
                     process_category: Option<ProcessCategory>,
                     message: Message|
          -> Element<Message> {
             let mut column = widget::column::with_capacity(7)
                 .spacing(space_xxs)
-                .push(widget::text::title4(name))
                 .push(widget::column!(
-                    widget::text::body(data)
-                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                    widget::text::title4(name),
                     widget::text::caption(caption)
                         .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-                ));
+                ))
+                .push(
+                    widget::text::body(data)
+                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                );
 
             if let Some(sort_category) = process_category {
                 // The compare function is backwards, so this uses min_by
@@ -660,29 +680,31 @@ impl App {
             .into()
         };
 
+        let separator = "  ·  ";
+
         let mut items = Vec::with_capacity(4 + graph_item.gpus.len() * 2);
         items.push(card(
             GraphKind::Cpu,
             fl!("cpu"),
+            graph_item
+                .cpus
+                .first()
+                .map(|x| x.brand.clone())
+                .unwrap_or_default(),
             if let Some(temp) = graph_item.max_cpu_temp() {
                 format!(
-                    "{:.1}% / {} / {:.1}°C",
+                    "{:.1}%{separator}{}{separator}{:.1}°C",
                     graph_item.total_cpu_usage(),
                     format_frequency(graph_item.max_cpu_frequency()),
                     temp
                 )
             } else {
                 format!(
-                    "{:.1}% / {}",
+                    "{:.1}%{separator}{}",
                     graph_item.total_cpu_usage(),
                     format_frequency(graph_item.max_cpu_frequency())
                 )
             },
-            graph_item
-                .cpus
-                .first()
-                .map(|x| x.brand.clone())
-                .unwrap_or_default(),
             Some(ProcessCategory::CPU),
             Message::NavPage(NavPage::Cpu),
         ));
@@ -691,13 +713,13 @@ impl App {
             GraphKind::Memory,
             fl!("memory"),
             format!(
-                "{} ({:.1}%)",
-                humansize::format_size(graph_item.memory.used, humansize::BINARY),
-                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
-            ),
-            format!(
                 "{}",
                 humansize::format_size(graph_item.memory.total, humansize::BINARY),
+            ),
+            format!(
+                "{:.1}%{separator}{}",
+                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
+                humansize::format_size(graph_item.memory.used, humansize::BINARY),
             ),
             Some(ProcessCategory::Memory),
             Message::NavPage(NavPage::Memory),
@@ -707,12 +729,12 @@ impl App {
         items.push(card(
             GraphKind::DiskTotal,
             fl!("disk"),
+            String::new(),
             format!(
-                "{}/s read / {}/s write",
+                "{}/s read{separator}{}/s write",
                 humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
                 humansize::format_size(disk_io.1 as u64, humansize::DECIMAL)
             ),
-            String::new(),
             Some(ProcessCategory::DiskTotal),
             Message::NavPage(NavPage::Disk),
         ));
@@ -721,12 +743,12 @@ impl App {
         items.push(card(
             GraphKind::NetworkTotal,
             fl!("network"),
+            String::new(),
             format!(
-                "{}/s rx / {}/s tx",
+                "{}/s rx{separator}{}/s tx",
                 humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
                 humansize::format_size(network_io.1 as u64, humansize::DECIMAL)
             ),
-            String::new(),
             None,
             Message::NavPage(NavPage::Network),
         ));
@@ -737,10 +759,10 @@ impl App {
                     GpuState::Active | GpuState::Idle(_) => {
                         let mut caption = format!("{:.1}%", usage);
                         if let Some(power) = gpu.power {
-                            let _ = write!(caption, " / {:.1}W", power);
+                            let _ = write!(caption, "{separator}{:.1} W", power);
                         }
                         if let Some(temp) = gpu.temp {
-                            let _ = write!(caption, " / {:.1}°C", temp);
+                            let _ = write!(caption, "{separator}{:.1}°C", temp);
                         }
                         (
                             caption,
@@ -752,8 +774,8 @@ impl App {
                 items.push(card(
                     GraphKind::GpuUsage(gpu.id),
                     fl!("gpu-index", index = gpu_i),
-                    caption,
                     gpu.name.clone(),
+                    caption,
                     process_category,
                     Message::GpuSelect(gpu_i),
                 ));
@@ -763,9 +785,9 @@ impl App {
                     let (caption, process_category) = match gpu.state {
                         GpuState::Active | GpuState::Idle(_) => (
                             format!(
-                                "{} ({:.1}%) / {}",
-                                humansize::format_size(vram_used, humansize::BINARY),
+                                "{:.1}%{separator}{} / {}",
                                 100.0 * (vram_used as f32) / (vram_total as f32),
+                                humansize::format_size(vram_used, humansize::BINARY),
                                 humansize::format_size(vram_total, humansize::BINARY),
                             ),
                             Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
@@ -775,9 +797,8 @@ impl App {
                     items.push(card(
                         GraphKind::GpuVram(gpu.id),
                         fl!("gpu-vram-index", index = gpu_i),
-                        caption,
-                        //TODO: show vram total format!("{}", humansize::format_size(vram_total, humansize::BINARY)),
                         gpu.name.clone(),
+                        caption,
                         process_category,
                         Message::GpuSelect(gpu_i),
                     ));
@@ -939,7 +960,7 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill),
         )
-        .on_press(Message::ProcessSelect(None))
+        .on_press(Message::Select(None))
         .into()
     }
 }
@@ -1022,10 +1043,11 @@ impl Application for App {
             processes: Vec::new(),
             process_content: iced::widget::list::Content::new(),
             process_search: (String::new(), None),
-            process_selected: None,
             process_sort: (ProcessCategory::default(), false),
             scroll_header_id: widget::Id::unique(),
             scroll_table_id: widget::Id::unique(),
+            selected: None,
+            size: None,
         };
 
         let command = Task::batch([
@@ -1047,7 +1069,7 @@ impl Application for App {
         if self.core.window.show_context {
             return self.update(Message::ToggleContextPage(self.context_page));
         }
-        if self.process_selected.take().is_some() {
+        if self.selected.take().is_some() {
             return Task::none();
         }
         if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
@@ -1058,7 +1080,7 @@ impl Application for App {
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Self::Message> {
         self.nav_model.activate(id);
-        self.process_selected = None;
+        self.selected = None;
         self.update_snapshot();
         Task::none()
     }
@@ -1104,6 +1126,23 @@ impl Application for App {
             Message::DialogConfirm => {
                 if let Some(dialog_kind) = self.dialog_opt.take() {
                     match dialog_kind {
+                        DialogKind::AppQuit {
+                            processes, force, ..
+                        } => {
+                            //TODO: show errors?
+                            #[cfg(unix)]
+                            {
+                                for process in processes {
+                                    let Some(pid) = process.pid else { continue };
+                                    if let Ok(pid_c) = pid.as_u32().try_into() {
+                                        let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+                                        unsafe {
+                                            libc::kill(pid_c, sig);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         DialogKind::ProcessQuit { pid, force, .. } => {
                             //TODO: show errors?
                             #[cfg(unix)]
@@ -1152,7 +1191,7 @@ impl Application for App {
                 }
                 if let Some(id) = id_opt {
                     self.nav_model.activate(id);
-                    self.process_selected = None;
+                    self.selected = None;
                     self.update_snapshot();
                 }
             }
@@ -1167,10 +1206,6 @@ impl Application for App {
                 };
                 self.process_search = (search, regex_opt);
                 self.update_snapshot();
-            }
-            Message::ProcessSelect(process_selected) => {
-                self.process_selected = process_selected;
-                //TODO: reset that item in Contents?
             }
             Message::ProcessSort(category) => {
                 if self.process_sort.0 == category {
@@ -1209,6 +1244,15 @@ impl Application for App {
                 } else {
                     NavPage::Processes
                 }));
+            }
+            Message::Select(selected) => {
+                self.selected = selected;
+                //TODO: reset that item in Contents?
+            }
+            Message::Size(window_id, size) => {
+                if self.core.main_window_id() == Some(window_id) {
+                    self.size = Some(size);
+                }
             }
             Message::Snapshot(graph_item, apps, processes) => {
                 self.graph_snapshot = Some(graph_item);
@@ -1257,22 +1301,50 @@ impl Application for App {
     }
 
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
-        let mut dialog = widget::dialog().secondary_action(
-            widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
-        );
-        match self.dialog_opt.as_ref()? {
-            DialogKind::ProcessQuit { name, force, .. } => {
-                dialog = dialog
+        let element: Element<_> = match self.dialog_opt.as_ref()? {
+            DialogKind::AppQuit {
+                name,
+                processes,
+                force,
+                ..
+            } => {
+                let sort_category = ProcessCategory::Name;
+                let categories = [
+                    ProcessCategory::App,
+                    ProcessCategory::Name,
+                    ProcessCategory::PID,
+                ];
+                let mut table_content = widget::column::with_capacity(processes.len() * 2);
+                for process in processes.iter() {
+                    table_content = table_content
+                        .push(widget::divider::horizontal::default())
+                        .push(table_row(process, &categories, &None));
+                }
+                widget::dialog()
                     .title(if *force {
-                        fl!("force-quit-title")
+                        fl!("force-quit-app-title", name = name)
                     } else {
-                        fl!("quit-title")
+                        fl!("quit-app-title", name = name)
                     })
                     .body(if *force {
-                        fl!("force-quit-body", name = name)
+                        fl!("force-quit-app-body")
                     } else {
-                        fl!("quit-body", name = name)
+                        fl!("quit-app-body")
                     })
+                    .control(widget::column!(
+                        table_header(&categories, sort_category, false, false),
+                        widget::scrollable(table_content).height({
+                            let max_size = self
+                                .size
+                                .map_or(480.0, |size| (size.height - 300.0).min(480.0));
+                            let scrollable_height = processes.len() as f32 * 40.0;
+                            if scrollable_height > max_size {
+                                Length::Fixed(max_size)
+                            } else {
+                                Length::Shrink
+                            }
+                        })
+                    ))
                     .primary_action(
                         widget::button::destructive(if *force {
                             fl!("force-quit")
@@ -1280,17 +1352,92 @@ impl Application for App {
                             fl!("quit")
                         })
                         .on_press(Message::DialogConfirm),
-                    );
+                    )
+                    .secondary_action(
+                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                    )
+                    .into()
             }
-        }
-        Some(dialog.into())
+            DialogKind::ProcessQuit { name, force, .. } => widget::dialog()
+                .title(if *force {
+                    fl!("force-quit-title")
+                } else {
+                    fl!("quit-title")
+                })
+                .body(if *force {
+                    fl!("force-quit-body", name = name)
+                } else {
+                    fl!("quit-body", name = name)
+                })
+                .primary_action(
+                    widget::button::destructive(if *force {
+                        fl!("force-quit")
+                    } else {
+                        fl!("quit")
+                    })
+                    .on_press(Message::DialogConfirm),
+                )
+                .secondary_action(
+                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                )
+                .into(),
+        };
+        Some(element)
     }
 
     fn footer(&self) -> Option<Element<'_, Self::Message>> {
         let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
-        let pid = self.process_selected?;
-        let item = self.processes.iter().find(|x| x.pid == Some(pid))?;
+        //TODO: support app selection
+        let (item, force_quit, quit) = match self.selected.as_ref()? {
+            SelectedItem::App(app_id) => {
+                let item = self
+                    .apps
+                    .iter()
+                    .find(|x| x.app.as_ref().map_or(false, |app| &app.id == app_id))?;
+                let processes: Vec<ProcessItem> = self
+                    .processes
+                    .iter()
+                    .filter_map(|x| {
+                        let app = x.app.as_ref()?;
+                        if &app.id == app_id {
+                            Some(x.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (
+                    item,
+                    DialogKind::AppQuit {
+                        name: item.name.clone(),
+                        processes: processes.clone(),
+                        force: true,
+                    },
+                    DialogKind::AppQuit {
+                        name: item.name.clone(),
+                        processes,
+                        force: false,
+                    },
+                )
+            }
+            SelectedItem::Process(pid) => {
+                let item = self.processes.iter().find(|x| x.pid == Some(*pid))?;
+                (
+                    item,
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid: *pid,
+                        force: true,
+                    },
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid: *pid,
+                        force: false,
+                    },
+                )
+            }
+        };
         let mut row = widget::row::with_capacity(5)
             .align_y(Alignment::Center)
             .spacing(space_xxs);
@@ -1317,23 +1464,10 @@ impl Application for App {
                 .width(Length::Shrink),
             )
             .push(
-                widget::button::destructive(fl!("force-quit")).on_press(Message::DialogOpen(
-                    DialogKind::ProcessQuit {
-                        name: item.name.clone(),
-                        pid,
-                        force: true,
-                    },
-                )),
+                widget::button::destructive(fl!("force-quit"))
+                    .on_press(Message::DialogOpen(force_quit)),
             )
-            .push(
-                widget::button::standard(fl!("quit")).on_press(Message::DialogOpen(
-                    DialogKind::ProcessQuit {
-                        name: item.name.clone(),
-                        pid,
-                        force: false,
-                    },
-                )),
-            );
+            .push(widget::button::standard(fl!("quit")).on_press(Message::DialogOpen(quit)));
         Some(
             widget::container(row)
                 .padding(space_xxs)
@@ -1433,7 +1567,7 @@ impl Application for App {
                                 move |_i, item| {
                                     widget::column::with_capacity(2)
                                         .push(widget::divider::horizontal::default())
-                                        .push(table_row(item, &categories, &self.process_selected))
+                                        .push(table_row(item, &categories, &self.selected))
                                         .into()
                                 },
                             ))
@@ -1454,7 +1588,7 @@ impl Application for App {
                         .width(Length::Fill)
                         .height(Length::Fill),
                 )
-                .on_press(Message::ProcessSelect(None));
+                .on_press(Message::Select(None));
                 return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
                     widget::id_container(content, id.clone()).into()
                 } else {
@@ -1677,7 +1811,7 @@ impl Application for App {
                                         if let Some(power) = gpu.power {
                                             row = row.push(widget::column!(
                                                 widget::text::body(fl!("power")),
-                                                widget::text::heading(format!("{:.1}W", power))
+                                                widget::text::heading(format!("{:.1} W", power))
                                             ));
                                         }
                                         if let Some(temp) = gpu.temp {
@@ -2006,7 +2140,7 @@ impl Application for App {
             .width(Length::Fill)
             .height(Length::Fill),
         )
-        .on_press(Message::ProcessSelect(None));
+        .on_press(Message::Select(None));
         if let Some(id) = self.nav_model.active_data::<widget::Id>() {
             widget::id_container(content, id.clone()).into()
         } else {
@@ -2026,6 +2160,13 @@ impl Application for App {
         struct ConfigSubscription;
 
         Subscription::batch([
+            event::listen_with(|event, _status, window_id| match event {
+                Event::Window(WindowEvent::Opened { position: _, size }) => {
+                    Some(Message::Size(window_id, size))
+                }
+                Event::Window(WindowEvent::Resized(s)) => Some(Message::Size(window_id, s)),
+                _ => None,
+            }),
             Subscription::run(info::worker),
             cosmic_config::config_subscription(
                 TypeId::of::<ConfigSubscription>(),

@@ -83,6 +83,12 @@ light = Light
 # Dialogs
 cancel = Cancel
 
+## App quit
+force-quit-app-title = Force quit "{$name}"?
+force-quit-app-body = The following processes will be quit immediately and forcibly without cleanup or warning.
+quit-app-title = Quit "{$name}"?
+quit-app-body = The following processes will be quit.
+
 ## Process quit
 force-quit = Force quit
 force-quit-title = Force quit the process?
