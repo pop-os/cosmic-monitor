@@ -356,6 +356,7 @@ impl Platform for LinuxPlatform {
                     id: id_opt.unwrap_or(GpuId::Other(id)),
                     name,
                     state: GpuState::Active,
+                    frequency: None,
                     power: None,
                     temp: None,
                     usage: None,
@@ -368,6 +369,10 @@ impl Platform for LinuxPlatform {
                 };
 
                 //TODO: log errors
+                //TODO: gt_act_freq_mhz is only available on Intel
+                if let Ok(data) = fs::read_to_string(drm_path.join("gt_act_freq_mhz")) {
+                    gpu_item.frequency = data.trim().parse().ok();
+                };
                 //TODO: gpu_busy_percent is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("gpu_busy_percent")) {
                     gpu_item.usage = data.trim().parse().ok();
@@ -413,6 +418,13 @@ impl Platform for LinuxPlatform {
                 if let Ok(entries) = fs::read_dir(device_path.join("hwmon")) {
                     for entry_res in entries {
                         let Ok(entry) = entry_res else { continue };
+
+                        // Check for frequency info
+                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input")) {
+                            if let Ok(hz) = data.trim().parse::<u64>() {
+                                gpu_item.frequency = Some(hz / 1_000_000);
+                            }
+                        }
 
                         // Check for power info
                         if let Ok(data) = fs::read_to_string(entry.path().join("energy1_input")) {
@@ -469,6 +481,7 @@ impl Platform for LinuxPlatform {
                     // Copy fields that NVML will know better than DRM
                     gpu.name = nvml_gpu.name;
                     gpu.state = nvml_gpu.state;
+                    gpu.frequency = nvml_gpu.frequency;
                     gpu.power = nvml_gpu.power;
                     gpu.temp = nvml_gpu.temp;
                     gpu.usage = nvml_gpu.usage;

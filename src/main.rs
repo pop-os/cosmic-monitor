@@ -34,7 +34,6 @@ use std::{
     collections::{HashMap, VecDeque},
     env,
     error::Error,
-    fmt::Write as _,
     time::{Duration, Instant},
 };
 use sysinfo::Pid;
@@ -51,9 +50,12 @@ mod info;
 mod localize;
 
 use menu::menu_bar;
+
+use crate::graph::ProcGraphKind;
 mod menu;
 
-const SMALL_GRAPH_HEIGHT: f32 = 176.0;
+const CARD_DATA_HEIGHT: f32 = 62.0;
+const SMALL_GRAPH_HEIGHT: f32 = 207.0;
 const LARGE_GRAPH_HEIGHT: f32 = 300.0;
 const MIN_GRAPH_WIDTH: f32 = 640.0;
 const MIN_PROCESSES_WIDTH: f32 = 720.0;
@@ -275,9 +277,11 @@ pub enum Message {
     None,
     AppTheme(AppTheme),
     Config(Box<Config>),
+    CpuGraph(ProcGraphKind),
     DialogCancel,
     DialogConfirm,
     DialogOpen(DialogKind),
+    GpuGraph(GpuId, ProcGraphKind),
     GpuSelect(usize),
     Graph(GraphItem),
     LaunchUrl(String),
@@ -356,7 +360,9 @@ pub struct App {
     config_handler: Option<cosmic_config::Config>,
     context_page: ContextPage,
     core: Core,
+    cpu_graph: ProcGraphKind,
     dialog_opt: Option<DialogKind>,
+    gpu_graphs: HashMap<GpuId, ProcGraphKind>,
     gpu_id_opt: Option<GpuId>,
     gpu_names: Vec<String>,
     graph_history: VecDeque<GraphItem>,
@@ -476,6 +482,79 @@ impl App {
         .into()
     }
 
+    //TODO: make a libcosmic button style for tags
+    fn tag(
+        &self,
+        element: impl Into<Element<'static, Message>>,
+        message: Message,
+        large: bool,
+    ) -> Element<'static, Message> {
+        let cosmic_theme::Spacing {
+            space_s,
+            space_xxs,
+            space_xxxs,
+            ..
+        } = theme::active().cosmic().spacing;
+
+        let selected = match message {
+            Message::CpuGraph(cpu_graph) => self.cpu_graph == cpu_graph,
+            Message::GpuGraph(gpu_id, gpu_graph) => {
+                self.gpu_graphs.get(&gpu_id).copied().unwrap_or_default() == gpu_graph
+            }
+            _ => false,
+        };
+        let mut row = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .spacing(space_xxxs);
+        let class = if selected {
+            use widget::button::Catalog;
+
+            row = row.push(widget::icon::from_name("object-select-symbolic").size(16));
+
+            //TODO: implement selected style in libcosmic for standard button
+            fn adjust(
+                theme: &cosmic::Theme,
+                mut style: widget::button::Style,
+            ) -> widget::button::Style {
+                style.text_color = Some(theme.cosmic().accent_text_color().into());
+                style.icon_color = style.text_color;
+                style
+            }
+
+            theme::Button::Custom {
+                active: Box::new(|focused, theme| {
+                    adjust(theme, theme.active(focused, true, &theme::Button::Standard))
+                }),
+                disabled: Box::new(|theme| adjust(theme, theme.disabled(&theme::Button::Standard))),
+                hovered: Box::new(|focused, theme| {
+                    adjust(
+                        theme,
+                        theme.hovered(focused, true, &theme::Button::Standard),
+                    )
+                }),
+                pressed: Box::new(|focused, theme| {
+                    adjust(
+                        theme,
+                        theme.pressed(focused, true, &theme::Button::Standard),
+                    )
+                }),
+            }
+        } else {
+            theme::Button::Standard
+        };
+        row = row.push(element);
+        let button = widget::button::custom(row)
+            .class(class)
+            .on_press(message)
+            //TODO: selected currently does nothing in libcosmic
+            .selected(selected);
+        if large {
+            button.height(50).padding([space_xxxs, space_s]).into()
+        } else {
+            button.height(29).padding([space_xxxs, space_xxs]).into()
+        }
+    }
+
     fn top_processes_by<'a>(
         &'a self,
         show_apps: bool,
@@ -544,13 +623,14 @@ impl App {
             space_s,
             space_xs,
             space_xxs,
+            space_xxxs,
             ..
         } = theme::active().cosmic().spacing;
 
         let card = |graph_kind,
                     name,
                     caption,
-                    data,
+                    data: Element<'static, Message>,
                     process_category: Option<ProcessCategory>,
                     message: Message|
          -> Element<Message> {
@@ -561,10 +641,7 @@ impl App {
                     widget::text::caption(caption)
                         .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
                 ))
-                .push(
-                    widget::text::body(data)
-                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-                );
+                .push(widget::container(data).height(CARD_DATA_HEIGHT));
 
             if let Some(sort_category) = process_category {
                 // The compare function is backwards, so this uses min_by
@@ -605,7 +682,7 @@ impl App {
                 }
             } else {
                 match graph_kind {
-                    GraphKind::GpuUsage(gpu_id) | GraphKind::GpuVram(gpu_id) => {
+                    GraphKind::Gpu(gpu_id, _) | GraphKind::GpuVram(gpu_id) => {
                         if let Some(gpu) = graph_item.gpus.iter().find(|x| x.id == gpu_id) {
                             column = column
                                 .push(widget::divider::horizontal::default())
@@ -680,30 +757,43 @@ impl App {
             .into()
         };
 
-        let separator = "  ·  ";
-
         let mut items = Vec::with_capacity(4 + graph_item.gpus.len() * 2);
         items.push(card(
-            GraphKind::Cpu,
+            GraphKind::Cpu(self.cpu_graph),
             fl!("cpu"),
             graph_item
                 .cpus
                 .first()
                 .map(|x| x.brand.clone())
                 .unwrap_or_default(),
-            if let Some(temp) = graph_item.max_cpu_temp() {
-                format!(
-                    "{:.1}%{separator}{}{separator}{:.1}°C",
-                    graph_item.total_cpu_usage(),
-                    format_frequency(graph_item.max_cpu_frequency()),
-                    temp
-                )
-            } else {
-                format!(
-                    "{:.1}%{separator}{}",
-                    graph_item.total_cpu_usage(),
-                    format_frequency(graph_item.max_cpu_frequency())
-                )
+            {
+                let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
+                {
+                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                    row = row.push(self.tag(
+                        widget::text::body(format!("{:.1}%", graph_item.total_cpu_usage())),
+                        Message::CpuGraph(ProcGraphKind::Utilization),
+                        false,
+                    ));
+                    row = row.push(self.tag(
+                        widget::text::body(format_frequency(graph_item.max_cpu_frequency())),
+                        Message::CpuGraph(ProcGraphKind::Frequency),
+                        false,
+                    ));
+                    column = column.push(row);
+                }
+                {
+                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                    if let Some(temp) = graph_item.max_cpu_temp() {
+                        row = row.push(self.tag(
+                            widget::text::body(format!("{:.1}°C", temp)),
+                            Message::CpuGraph(ProcGraphKind::Temperature),
+                            false,
+                        ));
+                    }
+                    column = column.push(row);
+                }
+                column.into()
             },
             Some(ProcessCategory::CPU),
             Message::NavPage(NavPage::Cpu),
@@ -716,11 +806,18 @@ impl App {
                 "{}",
                 humansize::format_size(graph_item.memory.total, humansize::BINARY),
             ),
-            format!(
-                "{:.1}%{separator}{}",
-                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
-                humansize::format_size(graph_item.memory.used, humansize::BINARY),
-            ),
+            widget::column!(
+                widget::text::body(format!(
+                    "{:.1}%",
+                    100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
+                )),
+                widget::text::body(format!(
+                    "{}",
+                    humansize::format_size(graph_item.memory.used, humansize::BINARY),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             Some(ProcessCategory::Memory),
             Message::NavPage(NavPage::Memory),
         ));
@@ -730,11 +827,18 @@ impl App {
             GraphKind::DiskTotal,
             fl!("disk"),
             String::new(),
-            format!(
-                "{}/s read{separator}{}/s write",
-                humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
-                humansize::format_size(disk_io.1 as u64, humansize::DECIMAL)
-            ),
+            widget::column!(
+                widget::text::body(format!(
+                    "{}/s read",
+                    humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
+                )),
+                widget::text::body(format!(
+                    "{}/s write",
+                    humansize::format_size((disk_io.1) as u64, humansize::DECIMAL),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             Some(ProcessCategory::DiskTotal),
             Message::NavPage(NavPage::Disk),
         ));
@@ -744,61 +848,110 @@ impl App {
             GraphKind::NetworkTotal,
             fl!("network"),
             String::new(),
-            format!(
-                "{}/s rx{separator}{}/s tx",
-                humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
-                humansize::format_size(network_io.1 as u64, humansize::DECIMAL)
-            ),
+            widget::column!(
+                widget::text::body(format!(
+                    "{}/s rx",
+                    humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
+                )),
+                widget::text::body(format!(
+                    "{}/s tx",
+                    humansize::format_size((network_io.1) as u64, humansize::DECIMAL),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             None,
             Message::NavPage(NavPage::Network),
         ));
 
         for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
-                let (caption, process_category) = match gpu.state {
+                let (data, process_category) = match gpu.state {
                     GpuState::Active | GpuState::Idle(_) => {
-                        let mut caption = format!("{:.1}%", usage);
-                        if let Some(power) = gpu.power {
-                            let _ = write!(caption, "{separator}{:.1} W", power);
+                        let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
+                        {
+                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                            row = row.push(self.tag(
+                                widget::text::body(format!("{:.1}%", usage)),
+                                Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                false,
+                            ));
+                            if let Some(frequency) = gpu.frequency {
+                                row = row.push(self.tag(
+                                    widget::text::body(format_frequency(frequency)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                    false,
+                                ));
+                            }
+                            column = column.push(row);
                         }
-                        if let Some(temp) = gpu.temp {
-                            let _ = write!(caption, "{separator}{:.1}°C", temp);
+                        {
+                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                            if let Some(power) = gpu.power {
+                                row = row.push(self.tag(
+                                    widget::text::body(format!("{:.1} W", power)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                    false,
+                                ));
+                            }
+                            if let Some(temp) = gpu.temp {
+                                row = row.push(self.tag(
+                                    widget::text::body(format!("{:.1}°C", temp)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
+                                    false,
+                                ));
+                            }
+                            column = column.push(row);
                         }
                         (
-                            caption,
+                            column.into(),
                             Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
                         )
                     }
-                    GpuState::Suspended => (fl!("gpu-suspended-title"), None),
+                    GpuState::Suspended => {
+                        (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                    }
                 };
                 items.push(card(
-                    GraphKind::GpuUsage(gpu.id),
+                    GraphKind::Gpu(
+                        gpu.id,
+                        self.gpu_graphs.get(&gpu.id).copied().unwrap_or_default(),
+                    ),
                     fl!("gpu-index", index = gpu_i),
                     gpu.name.clone(),
-                    caption,
+                    data,
                     process_category,
                     Message::GpuSelect(gpu_i),
                 ));
             }
             if let Some(vram_used) = gpu.vram_used {
                 if let Some(vram_total) = gpu.vram_total {
-                    let (caption, process_category) = match gpu.state {
+                    let (data, process_category) = match gpu.state {
                         GpuState::Active | GpuState::Idle(_) => (
-                            format!(
-                                "{:.1}%{separator}{} / {}",
-                                100.0 * (vram_used as f32) / (vram_total as f32),
-                                humansize::format_size(vram_used, humansize::BINARY),
-                                humansize::format_size(vram_total, humansize::BINARY),
-                            ),
+                            widget::column!(
+                                widget::text::body(format!(
+                                    "{:.1}%",
+                                    100.0 * (vram_used as f32) / (vram_total as f32),
+                                ),),
+                                widget::text::body(format!(
+                                    "{} / {}",
+                                    humansize::format_size(vram_used, humansize::BINARY),
+                                    humansize::format_size(vram_total, humansize::BINARY),
+                                ),),
+                            )
+                            .spacing(space_xxxs)
+                            .into(),
                             Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
                         ),
-                        GpuState::Suspended => (fl!("gpu-suspended-title"), None),
+                        GpuState::Suspended => {
+                            (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                        }
                     };
                     items.push(card(
                         GraphKind::GpuVram(gpu.id),
                         fl!("gpu-vram-index", index = gpu_i),
                         gpu.name.clone(),
-                        caption,
+                        data,
                         process_category,
                         Message::GpuSelect(gpu_i),
                     ));
@@ -1033,7 +1186,9 @@ impl Application for App {
             config_handler: flags.config_handler,
             context_page: ContextPage::Settings,
             core,
+            cpu_graph: ProcGraphKind::default(),
             dialog_opt: None,
+            gpu_graphs: HashMap::new(),
             gpu_id_opt: None,
             gpu_names: Vec::new(),
             graph_history: VecDeque::new(),
@@ -1120,6 +1275,9 @@ impl Application for App {
                     return self.update_config();
                 }
             }
+            Message::CpuGraph(cpu_graph) => {
+                self.cpu_graph = cpu_graph;
+            }
             Message::DialogCancel => {
                 self.dialog_opt = None;
             }
@@ -1160,6 +1318,9 @@ impl Application for App {
             }
             Message::DialogOpen(dialog_kind) => {
                 self.dialog_opt = Some(dialog_kind);
+            }
+            Message::GpuGraph(gpu_id, gpu_graph) => {
+                self.gpu_graphs.insert(gpu_id, gpu_graph);
             }
             Message::GpuSelect(gpu_i) => {
                 self.gpu_id_opt = None;
@@ -1604,9 +1765,9 @@ impl Application for App {
                 column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::CPU,
                     move || {
-                        widget::column!(
-                            widget::text::title4(fl!("overall-utilization")),
-                            widget::row!(
+                        let mut row = widget::row::with_capacity(3)
+                            .spacing(space_xxs)
+                            .push(self.tag(
                                 widget::column!(
                                     widget::text::body(fl!("utilization")),
                                     widget::text::heading(format!(
@@ -1614,25 +1775,39 @@ impl Application for App {
                                         graph_item.total_cpu_usage()
                                     ))
                                 ),
+                                Message::CpuGraph(ProcGraphKind::Utilization),
+                                true,
+                            ))
+                            .push(self.tag(
                                 widget::column!(
                                     widget::text::body(fl!("speed")),
                                     widget::text::heading(format_frequency(
                                         graph_item.max_cpu_frequency()
                                     ))
                                 ),
-                                if let Some(temp) = graph_item.max_cpu_temp() {
-                                    widget::column!(
-                                        widget::text::body(fl!("temperature")),
-                                        widget::text::heading(format!("{:.1}°C", temp))
-                                    )
-                                } else {
-                                    widget::column!()
-                                }
+                                Message::CpuGraph(ProcGraphKind::Frequency),
+                                true,
+                            ));
+                        //TODO: CPU power
+                        if let Some(temp) = graph_item.max_cpu_temp() {
+                            row = row.push(self.tag(
+                                widget::column!(
+                                    widget::text::body(fl!("temperature")),
+                                    widget::text::heading(format!("{:.1}°C", temp))
+                                ),
+                                Message::CpuGraph(ProcGraphKind::Temperature),
+                                true,
+                            ));
+                        }
+                        widget::column!(
+                            widget::text::title4(fl!("overall-utilization")),
+                            row,
+                            canvas(
+                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
+                                    .legend()
                             )
-                            .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Cpu, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            .height(LARGE_GRAPH_HEIGHT)
+                            .width(Length::Fill),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1803,21 +1978,51 @@ impl Application for App {
                                     ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
                                     move || {
                                         let mut row =
-                                            widget::row::with_capacity(3).spacing(space_m);
-                                        row = row.push(widget::column!(
-                                            widget::text::body(fl!("utilization")),
-                                            widget::text::heading(format!("{:.1}%", usage))
+                                            widget::row::with_capacity(4).spacing(space_xxs);
+                                        row = row.push(self.tag(
+                                            widget::column!(
+                                                widget::text::body(fl!("utilization")),
+                                                widget::text::heading(format!("{:.1}%", usage))
+                                            ),
+                                            Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                            true,
                                         ));
+                                        if let Some(frequency) = gpu.frequency {
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("speed")),
+                                                    widget::text::heading(format_frequency(
+                                                        frequency
+                                                    ))
+                                                ),
+                                                Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                                true,
+                                            ));
+                                        }
                                         if let Some(power) = gpu.power {
-                                            row = row.push(widget::column!(
-                                                widget::text::body(fl!("power")),
-                                                widget::text::heading(format!("{:.1} W", power))
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("power")),
+                                                    widget::text::heading(format!(
+                                                        "{:.1} W",
+                                                        power
+                                                    ))
+                                                ),
+                                                Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                                true,
                                             ));
                                         }
                                         if let Some(temp) = gpu.temp {
-                                            row = row.push(widget::column!(
-                                                widget::text::body(fl!("temperature")),
-                                                widget::text::heading(format!("{:.1}°C", temp))
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("temperature")),
+                                                    widget::text::heading(format!("{:.1}°C", temp))
+                                                ),
+                                                Message::GpuGraph(
+                                                    gpu.id,
+                                                    ProcGraphKind::Temperature,
+                                                ),
+                                                true,
                                             ));
                                         }
                                         widget::column!(
@@ -1825,7 +2030,13 @@ impl Application for App {
                                             row,
                                             canvas(
                                                 Graph::new(
-                                                    GraphKind::GpuUsage(gpu.id),
+                                                    GraphKind::Gpu(
+                                                        gpu.id,
+                                                        self.gpu_graphs
+                                                            .get(&gpu.id)
+                                                            .copied()
+                                                            .unwrap_or_default()
+                                                    ),
                                                     &self.graph_history
                                                 )
                                                 .legend(),

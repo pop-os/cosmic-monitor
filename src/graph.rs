@@ -10,12 +10,21 @@ use super::{
     info::{GpuId, GraphItem},
 };
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProcGraphKind {
+    #[default]
+    Utilization,
+    Frequency,
+    Power,
+    Temperature,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum GraphKind<'a> {
-    Cpu,
+    Cpu(ProcGraphKind),
     Memory,
     Swap,
-    GpuUsage(GpuId),
+    Gpu(GpuId, ProcGraphKind),
     GpuVram(GpuId),
     DiskRead(&'a str),
     DiskWrite(&'a str),
@@ -23,6 +32,45 @@ pub enum GraphKind<'a> {
     NetworkRx(&'a str),
     NetworkTx(&'a str),
     NetworkTotal,
+}
+
+impl<'a> GraphKind<'a> {
+    fn label(&self, value: f32) -> String {
+        match self {
+            GraphKind::Cpu(ProcGraphKind::Utilization)
+            | GraphKind::Memory
+            | GraphKind::Swap
+            | GraphKind::Gpu(_, ProcGraphKind::Utilization)
+            | GraphKind::GpuVram(_) => {
+                format!("{:.0}%", value)
+            }
+            GraphKind::Cpu(ProcGraphKind::Frequency)
+            | GraphKind::Gpu(_, ProcGraphKind::Frequency) => {
+                if value >= 1000.0 {
+                    format!("{:.0} GHz", value / 1000.0)
+                } else {
+                    format!("{:.0} MHz", value)
+                }
+            }
+            GraphKind::Cpu(ProcGraphKind::Power) | GraphKind::Gpu(_, ProcGraphKind::Power) => {
+                format!("{:.0} W", value)
+            }
+            GraphKind::Cpu(ProcGraphKind::Temperature)
+            | GraphKind::Gpu(_, ProcGraphKind::Temperature) => {
+                format!("{:.0}°C", value)
+            }
+            GraphKind::DiskRead(_)
+            | GraphKind::DiskWrite(_)
+            | GraphKind::DiskTotal
+            | GraphKind::NetworkRx(_)
+            | GraphKind::NetworkTx(_)
+            | GraphKind::NetworkTotal => {
+                let format_options =
+                    humansize::FormatSizeOptions::from(humansize::DECIMAL).decimal_places(0);
+                format!("{}/s", humansize::format_size(value as u64, format_options))
+            }
+        }
+    }
 }
 
 pub struct Graph<'a> {
@@ -83,70 +131,17 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
 
         let calc_x = |time: f32| -> f32 { (1.0 - time / 60.0) * (bounds.width - legend_w) };
         let scale_y = match self.kind {
-            GraphKind::Cpu
+            GraphKind::Cpu(ProcGraphKind::Utilization)
             | GraphKind::Memory
             | GraphKind::Swap
-            | GraphKind::GpuUsage(_)
+            | GraphKind::Gpu(_, ProcGraphKind::Utilization)
             | GraphKind::GpuVram(_) => 100.0,
-            GraphKind::DiskRead(disk_name) => {
+            _ => {
                 let mut max = 0.0;
                 for graph_item in self.history.iter() {
-                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
-                        max = disk.read.max(max);
-                    }
+                    max = graph_item.value(self.kind).max(max);
                 }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
-            }
-            GraphKind::DiskWrite(disk_name) => {
-                let mut max = 0.0;
-                for graph_item in self.history.iter() {
-                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
-                        max = disk.write.max(max);
-                    }
-                }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
-            }
-            GraphKind::DiskTotal => {
-                let mut max = 0.0;
-                for graph_item in self.history.iter() {
-                    let disk_io = graph_item.total_disk_io();
-                    max = (disk_io.0 + disk_io.1).max(max);
-                }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
-            }
-            GraphKind::NetworkRx(network_name) => {
-                let mut max = 0.0;
-                for graph_item in self.history.iter() {
-                    for network in graph_item
-                        .networks
-                        .iter()
-                        .filter(|x| x.name == network_name)
-                    {
-                        max = network.rx.max(max);
-                    }
-                }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
-            }
-            GraphKind::NetworkTx(network_name) => {
-                let mut max = 0.0;
-                for graph_item in self.history.iter() {
-                    for network in graph_item
-                        .networks
-                        .iter()
-                        .filter(|x| x.name == network_name)
-                    {
-                        max = network.tx.max(max);
-                    }
-                }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
-            }
-            GraphKind::NetworkTotal => {
-                let mut max = 0.0;
-                for graph_item in self.history.iter() {
-                    let network_io = graph_item.total_network_io();
-                    max = (network_io.0 + network_io.1).max(max);
-                }
-                10.0f32.powf(max.log10().ceil().max(3.0) as f32)
+                10.0f32.powf(max.log10().ceil().max(2.0) as f32)
             }
         };
 
@@ -236,89 +231,36 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         );
 
         // Draw Y axis info
-        match self.kind {
-            GraphKind::Cpu
-            | GraphKind::Memory
-            | GraphKind::Swap
-            | GraphKind::GpuUsage(_)
-            | GraphKind::GpuVram(_) => {
-                text(
-                    "0%",
-                    Point::new(max_x, calc_y(0.0)),
-                    Alignment::Left,
-                    Vertical::Bottom,
-                    &mut frame,
-                );
-                for &(value, string) in
-                    &[(20.0, "20%"), (40.0, "40%"), (60.0, "60%"), (80.0, "80%")]
-                {
-                    let y = calc_y(value);
-                    let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
-                    frame.stroke(
-                        &path,
-                        canvas::Stroke::default().with_color(accent_color_0_5),
-                    );
+        text(
+            &self.kind.label(0.0),
+            Point::new(max_x, calc_y(0.0)),
+            Alignment::Left,
+            Vertical::Bottom,
+            &mut frame,
+        );
+        for &value in &[scale_y * 0.2, scale_y * 0.4, scale_y * 0.6, scale_y * 0.8] {
+            let y = calc_y(value);
+            let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
+            frame.stroke(
+                &path,
+                canvas::Stroke::default().with_color(accent_color_0_5),
+            );
 
-                    text(
-                        string,
-                        Point::new(max_x, y),
-                        Alignment::Left,
-                        Vertical::Center,
-                        &mut frame,
-                    );
-                }
-                text(
-                    "100%",
-                    Point::new(max_x, calc_y(100.0)),
-                    Alignment::Left,
-                    Vertical::Top,
-                    &mut frame,
-                );
-            }
-            GraphKind::DiskRead(_)
-            | GraphKind::DiskWrite(_)
-            | GraphKind::DiskTotal
-            | GraphKind::NetworkRx(_)
-            | GraphKind::NetworkTx(_)
-            | GraphKind::NetworkTotal => {
-                //TODO: automatic Y scale for these graphs
-                text(
-                    "0 B/s",
-                    Point::new(max_x, calc_y(0.0)),
-                    Alignment::Left,
-                    Vertical::Bottom,
-                    &mut frame,
-                );
-                let format_options =
-                    humansize::FormatSizeOptions::from(humansize::DECIMAL).decimal_places(0);
-                for &value in &[scale_y * 0.2, scale_y * 0.4, scale_y * 0.6, scale_y * 0.8] {
-                    let y = calc_y(value);
-                    let path = canvas::Path::line(Point::new(min_x, y), Point::new(max_x, y));
-                    frame.stroke(
-                        &path,
-                        canvas::Stroke::default().with_color(accent_color_0_5),
-                    );
-
-                    text(
-                        &format!("{}/s", humansize::format_size(value as u64, format_options)),
-                        Point::new(max_x, y),
-                        Alignment::Left,
-                        Vertical::Center,
-                        &mut frame,
-                    );
-                }
-                text(
-                    &format!(
-                        "{}/s",
-                        humansize::format_size(scale_y as u64, format_options)
-                    ),
-                    Point::new(max_x, calc_y(scale_y)),
-                    Alignment::Left,
-                    Vertical::Top,
-                    &mut frame,
-                );
-            }
+            text(
+                &self.kind.label(value),
+                Point::new(max_x, y),
+                Alignment::Left,
+                Vertical::Center,
+                &mut frame,
+            );
         }
+        text(
+            &self.kind.label(scale_y),
+            Point::new(max_x, calc_y(scale_y)),
+            Alignment::Left,
+            Vertical::Top,
+            &mut frame,
+        );
 
         // Draw values
         let start = self
@@ -339,76 +281,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         ));
         for (i, graph_item) in self.history.iter().enumerate() {
             let x = calc_x(end.saturating_duration_since(graph_item.time).as_secs_f32());
-            let value = match self.kind {
-                GraphKind::Cpu => graph_item.total_cpu_usage(),
-                GraphKind::Memory => {
-                    100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32)
-                }
-                GraphKind::Swap => {
-                    100.0 * (graph_item.memory.swap_used as f32)
-                        / (graph_item.memory.swap_total as f32)
-                }
-                GraphKind::GpuUsage(gpu_id) => {
-                    let mut total = 0.0;
-                    for gpu in graph_item.gpus.iter().filter(|x| x.id == gpu_id) {
-                        total += gpu.usage.unwrap_or_default();
-                    }
-                    total
-                }
-                GraphKind::GpuVram(gpu_id) => {
-                    let mut total = 0.0;
-                    for gpu in graph_item.gpus.iter().filter(|x| x.id == gpu_id) {
-                        total += 100.0 * (gpu.vram_used.unwrap_or_default() as f32)
-                            / (gpu.vram_total.unwrap_or_default() as f32);
-                    }
-                    total
-                }
-                GraphKind::DiskRead(disk_name) => {
-                    let mut total = 0.0;
-                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
-                        total += disk.read as f32;
-                    }
-                    total
-                }
-                GraphKind::DiskWrite(disk_name) => {
-                    let mut total = 0.0;
-                    for disk in graph_item.disks.iter().filter(|x| x.name == disk_name) {
-                        total += disk.write as f32;
-                    }
-                    total
-                }
-                GraphKind::DiskTotal => {
-                    let disk_io = graph_item.total_disk_io();
-                    (disk_io.0 + disk_io.1) as f32
-                }
-                GraphKind::NetworkRx(network_name) => {
-                    let mut total = 0.0;
-                    for network in graph_item
-                        .networks
-                        .iter()
-                        .filter(|x| x.name == network_name)
-                    {
-                        total += network.rx as f32;
-                    }
-                    total
-                }
-                GraphKind::NetworkTx(network_name) => {
-                    let mut total = 0.0;
-                    for network in graph_item
-                        .networks
-                        .iter()
-                        .filter(|x| x.name == network_name)
-                    {
-                        total += network.tx as f32;
-                    }
-                    total
-                }
-                GraphKind::NetworkTotal => {
-                    let network_io = graph_item.total_network_io();
-                    (network_io.0 + network_io.1) as f32
-                }
-            };
-            let y = calc_y(value);
+            let y = calc_y(graph_item.value(self.kind));
             let point = Point::new(x, y);
             area.line_to(point);
             if i == 0 {
