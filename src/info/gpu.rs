@@ -42,6 +42,7 @@ pub struct GpuItem {
     pub id: GpuId,
     pub name: String,
     pub state: GpuState,
+    pub frequency: Option<u64>,
     pub power: Option<f32>,
     pub usage: Option<f32>,
     pub temp: Option<f32>,

@@ -1,5 +1,8 @@
 use nvml_wrapper::{
-    Nvml, enum_wrappers::device::TemperatureSensor, enums::device::UsedGpuMemory, error::NvmlError,
+    Nvml,
+    enum_wrappers::device::{Clock, TemperatureSensor},
+    enums::device::UsedGpuMemory,
+    error::NvmlError,
 };
 use std::{collections::HashMap, fs, time::Instant};
 use sysinfo::{Components, Pid};
@@ -54,6 +57,7 @@ impl NvmlPlatform {
                     id: gpu_id,
                     name: String::new(),
                     state: GpuState::Active,
+                    frequency: None,
                     power: None,
                     temp: None,
                     usage: None,
@@ -99,6 +103,7 @@ impl NvmlPlatform {
                 }
                 GpuState::Suspended => {
                     // Clear GPU values when suspended
+                    gpu.frequency = None;
                     gpu.power = None;
                     gpu.temp = None;
                     gpu.usage = Some(0.0);
@@ -108,6 +113,8 @@ impl NvmlPlatform {
             }
 
             // Reading the values below will wake the GPU
+            gpu.frequency = device.clock_info(Clock::Graphics).ok().map(u64::from);
+
             let power = (device.power_usage()? as f32) / 1000.0;
             gpu.power = Some(power as f32);
 
