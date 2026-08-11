@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-monitor"
-version = "1.2.0"
+version = "1.5.0"
 authors = ["Jeremy Soller <jeremy@system76.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
@@ -45,17 +45,20 @@ features = ["about", "surface-message", "tokio", "winit"]
 xdgen = "0.1"
 
 [features]
-default = ["dbus-config", "nvml", "wgpu"]
+default = ["dbus-config", "nvml", "wayland", "wgpu"]
 dbus-config = ["libcosmic/dbus-config"]
 nvml = ["dep:nvml-wrapper"]
 wgpu = ["libcosmic/wgpu"]
-wayland = ["libcosmic/wayland"]
+wayland = ["libcosmic/wayland", "libcosmic/multi-window"]
 
 [profile.release-with-debug]
 inherits = "release"
 debug = true
 
-#[patch.'https://github.com/pop-os/libcosmic']
-#libcosmic = { path = "../libcosmic" }
-#cosmic-config = { path = "../libcosmic/cosmic-config" }
-#cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
+# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }

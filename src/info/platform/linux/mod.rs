@@ -12,7 +12,7 @@ use std::{
 };
 use sysinfo::{Components, Disk, Pid, Process, System};
 
-use super::{AppEntry, DiskItem, GpuId, GpuItem, Platform};
+use crate::info::{AppEntry, DiskItem, GpuId, GpuItem, GpuState, Platform};
 
 use fdinfo::FdInfo;
 mod fdinfo;
@@ -108,7 +108,7 @@ impl LinuxProcess {
             for (name, vram) in fdinfo.residents.iter_mut() {
                 //TODO: figure out what each GPU driver uses for this name
                 match name.as_str() {
-                    "vram" => {
+                    "local0" | "system0" | "vram" => {
                         self.gpu_usages.entry(fdinfo.gpu_id).or_insert((0.0, 0)).1 += *vram;
                     }
                     _ => {}
@@ -125,6 +125,7 @@ impl LinuxProcess {
 pub struct LinuxPlatform {
     amdgpu_ids: HashMap<(u16, u8), String>,
     app_entries: Vec<Arc<AppEntry>>,
+    gpu_energies: HashMap<GpuId, (Instant, u64)>,
     gpu_items: Vec<GpuItem>,
     nvml: Box<dyn Platform>,
     processes: HashMap<Pid, LinuxProcess>,
@@ -190,6 +191,7 @@ impl LinuxPlatform {
         Self {
             amdgpu_ids,
             app_entries,
+            gpu_energies: HashMap::new(),
             gpu_items: Vec::new(),
             #[cfg(feature = "nvml")]
             nvml: Box::new(super::nvml::NvmlPlatform::new()),
@@ -353,7 +355,9 @@ impl Platform for LinuxPlatform {
                     boot_vga: false,
                     id: id_opt.unwrap_or(GpuId::Other(id)),
                     name,
-                    //TODO: find GPU temp
+                    state: GpuState::Active,
+                    frequency: None,
+                    power: None,
                     temp: None,
                     usage: None,
                     vram_used: None,
@@ -365,6 +369,10 @@ impl Platform for LinuxPlatform {
                 };
 
                 //TODO: log errors
+                //TODO: gt_act_freq_mhz is only available on Intel
+                if let Ok(data) = fs::read_to_string(drm_path.join("gt_act_freq_mhz")) {
+                    gpu_item.frequency = data.trim().parse().ok();
+                };
                 //TODO: gpu_busy_percent is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("gpu_busy_percent")) {
                     gpu_item.usage = data.trim().parse().ok();
@@ -376,11 +384,74 @@ impl Platform for LinuxPlatform {
                 //TODO: mem_info_vram_total is only available on AMD
                 if let Ok(data) = fs::read_to_string(device_path.join("mem_info_vram_total")) {
                     gpu_item.vram_total = data.trim().parse().ok();
+                } else {
+                    // Try to find largest prefetchable memory BAR and assume that is VRAM
+                    if let Ok(data) = fs::read_to_string(device_path.join("resource")) {
+                        for line in data.lines() {
+                            let mut parts = line.split(" ");
+                            let parse_hex = |string: &str| -> Option<u64> {
+                                u64::from_str_radix(string.trim_start_matches("0x"), 16).ok()
+                            };
+                            let Some(start) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+                            let Some(end) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+                            let Some(flags) = parts.next().and_then(parse_hex) else {
+                                continue;
+                            };
+
+                            const IORESOURCE_MEM: u64 = 0x00000200;
+                            const IORESOURCE_PREFETCH: u64 = 0x00002000;
+                            if (flags & (IORESOURCE_MEM | IORESOURCE_PREFETCH))
+                                == (IORESOURCE_MEM | IORESOURCE_PREFETCH)
+                            {
+                                let len = (end + 1) - start;
+                                gpu_item.vram_total =
+                                    Some(gpu_item.vram_total.unwrap_or(0).max(len));
+                            }
+                        }
+                    }
                 };
 
                 if let Ok(entries) = fs::read_dir(device_path.join("hwmon")) {
                     for entry_res in entries {
                         let Ok(entry) = entry_res else { continue };
+
+                        // Check for frequency info
+                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input")) {
+                            if let Ok(hz) = data.trim().parse::<u64>() {
+                                gpu_item.frequency = Some(hz / 1_000_000);
+                            }
+                        }
+
+                        // Check for power info
+                        if let Ok(data) = fs::read_to_string(entry.path().join("energy1_input")) {
+                            // Intel GPUs provide energy1_input
+                            if let Ok(microjoules) = data.trim().parse::<u64>() {
+                                let time = Instant::now();
+                                if let Some((last_time, last_microjoules)) =
+                                    self.gpu_energies.insert(gpu_item.id, (time, microjoules))
+                                {
+                                    if let Some(duration) = time.checked_duration_since(last_time) {
+                                        let microwatts = (microjoules.wrapping_sub(last_microjoules)
+                                            as f32)
+                                            / duration.as_secs_f32();
+                                        gpu_item.power = Some(microwatts / 1_000_000.0);
+                                    }
+                                }
+                            }
+                        } else if let Ok(data) =
+                            fs::read_to_string(entry.path().join("power1_average"))
+                        {
+                            // AMD GPUs provide power1_average
+                            if let Ok(microwatts) = data.trim().parse::<f32>() {
+                                gpu_item.power = Some(microwatts / 1_000_000.0);
+                            }
+                        }
+
+                        // Check for temperature from matching Component from sysinfo
                         let file_name = entry.file_name();
                         let Some(file_name) = file_name.to_str() else {
                             continue;
@@ -393,10 +464,9 @@ impl Platform for LinuxPlatform {
                             if hwmon != file_name {
                                 continue;
                             }
-                            let Some(temp) = component.temperature() else {
-                                continue;
-                            };
-                            gpu_item.temp = Some(gpu_item.temp.map_or(temp, |x| temp.max(x)));
+                            if let Some(temp) = component.temperature() {
+                                gpu_item.temp = Some(gpu_item.temp.map_or(temp, |x| temp.max(x)));
+                            }
                         }
                     }
                 }
@@ -410,6 +480,9 @@ impl Platform for LinuxPlatform {
                 if gpu.id == nvml_gpu.id {
                     // Copy fields that NVML will know better than DRM
                     gpu.name = nvml_gpu.name;
+                    gpu.state = nvml_gpu.state;
+                    gpu.frequency = nvml_gpu.frequency;
+                    gpu.power = nvml_gpu.power;
                     gpu.temp = nvml_gpu.temp;
                     gpu.usage = nvml_gpu.usage;
                     gpu.vram_used = nvml_gpu.vram_used;

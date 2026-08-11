@@ -47,7 +47,10 @@ total-utilization = Total utilization
 
 ## GPU
 gpu-utilization = GPU Utilization
+gpu-suspended-title = Suspended
+gpu-suspended-description = Monitoring is disabled while the GPU is suspended.
 no-gpus = No supported GPUs found.
+power = Power
 vram = VRAM
 
 ## Disk
@@ -79,6 +82,12 @@ light = Light
 
 # Dialogs
 cancel = Cancel
+
+## App quit
+force-quit-app-title = Force quit "{$name}"?
+force-quit-app-body = The following processes will be quit immediately and forcibly without cleanup or warning.
+quit-app-title = Quit "{$name}"?
+quit-app-body = The following processes will be quit.
 
 ## Process quit
 force-quit = Force quit

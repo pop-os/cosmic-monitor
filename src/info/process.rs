@@ -14,7 +14,7 @@ use regex::Regex;
 use sysinfo::{Pid, Process, System, Users};
 
 use super::{GpuId, GpuItem, Platform};
-use crate::{fl, info::AppEntry};
+use crate::{SelectedItem, fl, info::AppEntry};
 
 fn best_name(p: &Process) -> String {
     // Name is truncated on Linux, try to fill in using cmdline or exe
@@ -308,6 +308,7 @@ impl ProcessItem {
     }
 
     pub fn generate_strings(&mut self) {
+        self.strings.clear();
         self.strings.insert(
             ProcessCategory::CPU,
             format!("{}.{}%", self.cpu_usage / 10, self.cpu_usage % 10),
@@ -386,6 +387,18 @@ impl ProcessItem {
                 .strings
                 .get(&ProcessCategory::PID)
                 .map_or(false, |x| regex.is_match(x))
+    }
+
+    pub fn as_selected(&self) -> Option<SelectedItem> {
+        if let Some(pid) = &self.pid {
+            return Some(SelectedItem::Process(*pid));
+        }
+
+        if let Some(app) = &self.app {
+            return Some(SelectedItem::App(app.id.clone()));
+        }
+
+        None
     }
 
     // Like get_text but without allocation

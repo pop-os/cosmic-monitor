@@ -5,6 +5,7 @@ pub struct CpuItem {
     pub brand: String,
     pub frequency: u64,
     pub name: String,
+    pub power: Option<f32>,
     pub temp: Option<f32>,
     pub usage: f32,
 }
@@ -42,6 +43,7 @@ impl CpuItem {
             brand: cpu.brand().into(),
             frequency: cpu.frequency(),
             name: cpu.name().into(),
+            power: None,
             temp,
             usage: cpu.cpu_usage(),
         }

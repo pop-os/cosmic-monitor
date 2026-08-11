@@ -14,7 +14,10 @@ use sysinfo::{
 };
 use tokio::sync::mpsc;
 
-use crate::Message;
+use crate::{
+    Message,
+    graph::{GraphKind, ProcGraphKind},
+};
 
 mod app;
 pub use self::app::*;
@@ -139,6 +142,95 @@ impl GraphItem {
             total.1 += network.tx;
         }
         total
+    }
+
+    pub fn value(&self, graph_kind: GraphKind) -> f32 {
+        match graph_kind {
+            GraphKind::Cpu(proc_kind) => match proc_kind {
+                ProcGraphKind::Utilization => self.total_cpu_usage(),
+                ProcGraphKind::Frequency => self.max_cpu_frequency() as f32,
+                ProcGraphKind::Power => 0.0, //TODO: CPU POWER
+                ProcGraphKind::Temperature => self.max_cpu_temp().unwrap_or(0.0),
+            },
+            GraphKind::Memory => 100.0 * (self.memory.used as f32) / (self.memory.total as f32),
+            GraphKind::Swap => {
+                100.0 * (self.memory.swap_used as f32) / (self.memory.swap_total as f32)
+            }
+            GraphKind::Gpu(gpu_id, proc_kind) => match proc_kind {
+                ProcGraphKind::Utilization => {
+                    let mut total = 0.0;
+                    for gpu in self.gpus.iter().filter(|x| x.id == gpu_id) {
+                        total += gpu.usage.unwrap_or_default();
+                    }
+                    total
+                }
+                ProcGraphKind::Frequency => {
+                    let mut max = 0;
+                    for gpu in self.gpus.iter().filter(|x| x.id == gpu_id) {
+                        max = gpu.frequency.unwrap_or_default().max(max);
+                    }
+                    max as f32
+                }
+                ProcGraphKind::Power => {
+                    let mut max = 0.0;
+                    for gpu in self.gpus.iter().filter(|x| x.id == gpu_id) {
+                        max = gpu.power.unwrap_or_default().max(max);
+                    }
+                    max
+                }
+                ProcGraphKind::Temperature => {
+                    let mut max = 0.0;
+                    for gpu in self.gpus.iter().filter(|x| x.id == gpu_id) {
+                        max = gpu.temp.unwrap_or_default().max(max);
+                    }
+                    max
+                }
+            },
+            GraphKind::GpuVram(gpu_id) => {
+                let mut total = 0.0;
+                for gpu in self.gpus.iter().filter(|x| x.id == gpu_id) {
+                    total += 100.0 * (gpu.vram_used.unwrap_or_default() as f32)
+                        / (gpu.vram_total.unwrap_or_default() as f32);
+                }
+                total
+            }
+            GraphKind::DiskRead(disk_name) => {
+                let mut total = 0.0;
+                for disk in self.disks.iter().filter(|x| x.name == disk_name) {
+                    total += disk.read as f32;
+                }
+                total
+            }
+            GraphKind::DiskWrite(disk_name) => {
+                let mut total = 0.0;
+                for disk in self.disks.iter().filter(|x| x.name == disk_name) {
+                    total += disk.write as f32;
+                }
+                total
+            }
+            GraphKind::DiskTotal => {
+                let disk_io = self.total_disk_io();
+                (disk_io.0 + disk_io.1) as f32
+            }
+            GraphKind::NetworkRx(network_name) => {
+                let mut total = 0.0;
+                for network in self.networks.iter().filter(|x| x.name == network_name) {
+                    total += network.rx as f32;
+                }
+                total
+            }
+            GraphKind::NetworkTx(network_name) => {
+                let mut total = 0.0;
+                for network in self.networks.iter().filter(|x| x.name == network_name) {
+                    total += network.tx as f32;
+                }
+                total
+            }
+            GraphKind::NetworkTotal => {
+                let network_io = self.total_network_io();
+                (network_io.0 + network_io.1) as f32
+            }
+        }
     }
 }
 

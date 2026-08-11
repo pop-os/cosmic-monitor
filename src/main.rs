@@ -8,12 +8,14 @@ use cosmic::{
     cosmic_config::{self, CosmicConfigEntry},
     cosmic_theme, executor,
     iced::{
-        self, Alignment, Border, Length, Limits, Size, Subscription,
+        self, Alignment, Border, Event, Length, Limits, Size, Subscription,
         core::text::{Ellipsize, EllipsizeHeightLimit, Shaping},
+        event,
         widget::{
             operation::AbsoluteOffset,
             scrollable::{Direction, Scrollbar, Viewport, scroll_to},
         },
+        window::{self, Event as WindowEvent},
     },
     surface, theme,
     widget::{
@@ -42,15 +44,18 @@ mod config;
 use graph::{Graph, GraphKind};
 mod graph;
 
-use info::{GpuId, GraphItem, ProcessCategory, ProcessItem};
+use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
 mod info;
 
 mod localize;
 
 use menu::menu_bar;
+
+use crate::graph::ProcGraphKind;
 mod menu;
 
-const SMALL_GRAPH_HEIGHT: f32 = 176.0;
+const CARD_DATA_HEIGHT: f32 = 62.0;
+const SMALL_GRAPH_HEIGHT: f32 = 207.0;
 const LARGE_GRAPH_HEIGHT: f32 = 300.0;
 const MIN_GRAPH_WIDTH: f32 = 640.0;
 const MIN_PROCESSES_WIDTH: f32 = 720.0;
@@ -170,7 +175,7 @@ fn table_header(
 fn table_row<'a>(
     item: &'a ProcessItem,
     categories: &[ProcessCategory],
-    selected: &Option<Pid>,
+    selected: &Option<SelectedItem>,
 ) -> Element<'a, Message> {
     let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
@@ -201,8 +206,8 @@ fn table_row<'a>(
         );
     }
     let mut container = widget::container(row);
-    //TODO: allow App selection
-    if selected.is_some() && selected == &item.pid {
+    let item_selected = item.as_selected();
+    if selected == &item_selected {
         container = container.style(|theme| {
             let cosmic = theme.cosmic();
             widget::container::Style {
@@ -217,7 +222,7 @@ fn table_row<'a>(
         });
     }
     widget::mouse_area(container)
-        .on_press(Message::ProcessSelect(item.pid))
+        .on_press(Message::Select(item_selected))
         .into()
 }
 
@@ -254,7 +259,16 @@ impl MenuAction for Action {
 
 #[derive(Clone, Debug)]
 pub enum DialogKind {
-    ProcessQuit { name: String, pid: Pid, force: bool },
+    AppQuit {
+        name: String,
+        processes: Vec<ProcessItem>,
+        force: bool,
+    },
+    ProcessQuit {
+        name: String,
+        pid: Pid,
+        force: bool,
+    },
 }
 
 /// Messages that are used specifically by our [`App`].
@@ -263,19 +277,22 @@ pub enum Message {
     None,
     AppTheme(AppTheme),
     Config(Box<Config>),
+    CpuGraph(ProcGraphKind),
     DialogCancel,
     DialogConfirm,
     DialogOpen(DialogKind),
+    GpuGraph(GpuId, ProcGraphKind),
     GpuSelect(usize),
     Graph(GraphItem),
     LaunchUrl(String),
     NavPage(NavPage),
     ProcessSearch(String),
-    ProcessSelect(Option<Pid>),
     ProcessSort(ProcessCategory),
     ScrollHeader(Viewport),
     ScrollTable(Viewport),
     SeeAllProcesses(bool, ProcessCategory, bool),
+    Select(Option<SelectedItem>),
+    Size(window::Id, Size),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
     Surface(surface::Action),
     SystemThemeChange,
@@ -328,6 +345,12 @@ impl NavPage {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SelectedItem {
+    App(String),
+    Process(Pid),
+}
+
 /// The [`App`] stores application-specific state.
 pub struct App {
     about: About,
@@ -337,7 +360,9 @@ pub struct App {
     config_handler: Option<cosmic_config::Config>,
     context_page: ContextPage,
     core: Core,
+    cpu_graph: ProcGraphKind,
     dialog_opt: Option<DialogKind>,
+    gpu_graphs: HashMap<GpuId, ProcGraphKind>,
     gpu_id_opt: Option<GpuId>,
     gpu_names: Vec<String>,
     graph_history: VecDeque<GraphItem>,
@@ -347,10 +372,11 @@ pub struct App {
     processes: Vec<ProcessItem>,
     process_content: iced::widget::list::Content<ProcessItem>,
     process_search: (String, Option<Regex>),
-    process_selected: Option<Pid>,
     process_sort: (ProcessCategory, bool),
     scroll_header_id: widget::Id,
     scroll_table_id: widget::Id,
+    selected: Option<SelectedItem>,
+    size: Option<Size>,
 }
 
 impl App {
@@ -456,6 +482,79 @@ impl App {
         .into()
     }
 
+    //TODO: make a libcosmic button style for tags
+    fn tag(
+        &self,
+        element: impl Into<Element<'static, Message>>,
+        message: Message,
+        large: bool,
+    ) -> Element<'static, Message> {
+        let cosmic_theme::Spacing {
+            space_s,
+            space_xxs,
+            space_xxxs,
+            ..
+        } = theme::active().cosmic().spacing;
+
+        let selected = match message {
+            Message::CpuGraph(cpu_graph) => self.cpu_graph == cpu_graph,
+            Message::GpuGraph(gpu_id, gpu_graph) => {
+                self.gpu_graphs.get(&gpu_id).copied().unwrap_or_default() == gpu_graph
+            }
+            _ => false,
+        };
+        let mut row = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .spacing(space_xxxs);
+        let class = if selected {
+            use widget::button::Catalog;
+
+            row = row.push(widget::icon::from_name("object-select-symbolic").size(16));
+
+            //TODO: implement selected style in libcosmic for standard button
+            fn adjust(
+                theme: &cosmic::Theme,
+                mut style: widget::button::Style,
+            ) -> widget::button::Style {
+                style.text_color = Some(theme.cosmic().accent_text_color().into());
+                style.icon_color = style.text_color;
+                style
+            }
+
+            theme::Button::Custom {
+                active: Box::new(|focused, theme| {
+                    adjust(theme, theme.active(focused, true, &theme::Button::Standard))
+                }),
+                disabled: Box::new(|theme| adjust(theme, theme.disabled(&theme::Button::Standard))),
+                hovered: Box::new(|focused, theme| {
+                    adjust(
+                        theme,
+                        theme.hovered(focused, true, &theme::Button::Standard),
+                    )
+                }),
+                pressed: Box::new(|focused, theme| {
+                    adjust(
+                        theme,
+                        theme.pressed(focused, true, &theme::Button::Standard),
+                    )
+                }),
+            }
+        } else {
+            theme::Button::Standard
+        };
+        row = row.push(element);
+        let button = widget::button::custom(row)
+            .class(class)
+            .on_press(message)
+            //TODO: selected currently does nothing in libcosmic
+            .selected(selected);
+        if large {
+            button.height(50).padding([space_xxxs, space_s]).into()
+        } else {
+            button.height(29).padding([space_xxxs, space_xxs]).into()
+        }
+    }
+
     fn top_processes_by<'a>(
         &'a self,
         show_apps: bool,
@@ -480,6 +579,7 @@ impl App {
             &self.processes
         }
         .iter()
+        .filter(|x| !x.text(sort_category).is_empty())
         .k_smallest_by(count, |a, b| {
             if sort_direction {
                 b.compare(a, sort_category)
@@ -490,7 +590,7 @@ impl App {
             column = column.push(
                 widget::column::with_capacity(2)
                     .push(widget::divider::horizontal::default())
-                    .push(table_row(item, &categories, &self.process_selected)),
+                    .push(table_row(item, &categories, &self.selected)),
             );
         }
         column = column.push(widget::divider::horizontal::default());
@@ -523,25 +623,25 @@ impl App {
             space_s,
             space_xs,
             space_xxs,
+            space_xxxs,
             ..
         } = theme::active().cosmic().spacing;
 
         let card = |graph_kind,
                     name,
-                    data,
                     caption,
+                    data: Element<'static, Message>,
                     process_category: Option<ProcessCategory>,
                     message: Message|
          -> Element<Message> {
             let mut column = widget::column::with_capacity(7)
                 .spacing(space_xxs)
-                .push(widget::text::title4(name))
                 .push(widget::column!(
-                    widget::text::body(data)
-                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                    widget::text::title4(name),
                     widget::text::caption(caption)
                         .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-                ));
+                ))
+                .push(widget::container(data).height(CARD_DATA_HEIGHT));
 
             if let Some(sort_category) = process_category {
                 // The compare function is backwards, so this uses min_by
@@ -580,41 +680,59 @@ impl App {
                         .push(row)
                         .push(widget::divider::horizontal::default());
                 }
-            } else if matches!(graph_kind, GraphKind::NetworkTotal) {
-                if let Some((name, io)) = graph_item
-                    .networks
-                    .iter()
-                    .map(|x| (x.name.as_str(), (x.rx + x.tx) as u64))
-                    .max_by(|a, b| a.1.cmp(&b.1))
-                {
-                    let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
-                    row = row
-                        .push(
-                            widget::container(
-                                widget::text(name)
-                                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                                    .shaping(Shaping::Basic),
-                            )
-                            .align_x(Alignment::Start)
-                            .align_y(Alignment::Center)
-                            .width(Length::Fill),
-                        )
-                        .push(
-                            widget::container(
-                                widget::text(format!(
-                                    "{}/s",
-                                    humansize::format_size(io, humansize::DECIMAL)
-                                ))
-                                .shaping(Shaping::Basic),
-                            )
-                            .align_x(Alignment::End)
-                            .align_y(Alignment::Center)
-                            .width(Length::Shrink),
-                        );
-                    column = column
-                        .push(widget::divider::horizontal::default())
-                        .push(row)
-                        .push(widget::divider::horizontal::default());
+            } else {
+                match graph_kind {
+                    GraphKind::Gpu(gpu_id, _) | GraphKind::GpuVram(gpu_id) => {
+                        if let Some(gpu) = graph_item.gpus.iter().find(|x| x.id == gpu_id) {
+                            column = column
+                                .push(widget::divider::horizontal::default())
+                                .push(widget::text::body(match gpu.state {
+                                    GpuState::Suspended => fl!("gpu-suspended-description"),
+                                    _ => String::new(),
+                                }))
+                                .push(widget::divider::horizontal::default());
+                        }
+                    }
+                    GraphKind::NetworkTotal => {
+                        if let Some((name, io)) = graph_item
+                            .networks
+                            .iter()
+                            .map(|x| (x.name.as_str(), (x.rx + x.tx) as u64))
+                            .max_by(|a, b| a.1.cmp(&b.1))
+                        {
+                            let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
+                            row = row
+                                .push(
+                                    widget::container(
+                                        widget::text(name)
+                                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(
+                                                1,
+                                            )))
+                                            .shaping(Shaping::Basic),
+                                    )
+                                    .align_x(Alignment::Start)
+                                    .align_y(Alignment::Center)
+                                    .width(Length::Fill),
+                                )
+                                .push(
+                                    widget::container(
+                                        widget::text(format!(
+                                            "{}/s",
+                                            humansize::format_size(io, humansize::DECIMAL)
+                                        ))
+                                        .shaping(Shaping::Basic),
+                                    )
+                                    .align_x(Alignment::End)
+                                    .align_y(Alignment::Center)
+                                    .width(Length::Shrink),
+                                );
+                            column = column
+                                .push(widget::divider::horizontal::default())
+                                .push(row)
+                                .push(widget::divider::horizontal::default());
+                        }
+                    }
+                    _ => {}
                 }
             }
 
@@ -641,27 +759,42 @@ impl App {
 
         let mut items = Vec::with_capacity(4 + graph_item.gpus.len() * 2);
         items.push(card(
-            GraphKind::Cpu,
+            GraphKind::Cpu(self.cpu_graph),
             fl!("cpu"),
-            if let Some(temp) = graph_item.max_cpu_temp() {
-                format!(
-                    "{:.1}% / {} / {:.1}°C",
-                    graph_item.total_cpu_usage(),
-                    format_frequency(graph_item.max_cpu_frequency()),
-                    temp
-                )
-            } else {
-                format!(
-                    "{:.1}% / {}",
-                    graph_item.total_cpu_usage(),
-                    format_frequency(graph_item.max_cpu_frequency())
-                )
-            },
             graph_item
                 .cpus
                 .first()
                 .map(|x| x.brand.clone())
                 .unwrap_or_default(),
+            {
+                let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
+                {
+                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                    row = row.push(self.tag(
+                        widget::text::body(format!("{:.1}%", graph_item.total_cpu_usage())),
+                        Message::CpuGraph(ProcGraphKind::Utilization),
+                        false,
+                    ));
+                    row = row.push(self.tag(
+                        widget::text::body(format_frequency(graph_item.max_cpu_frequency())),
+                        Message::CpuGraph(ProcGraphKind::Frequency),
+                        false,
+                    ));
+                    column = column.push(row);
+                }
+                {
+                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                    if let Some(temp) = graph_item.max_cpu_temp() {
+                        row = row.push(self.tag(
+                            widget::text::body(format!("{:.1}°C", temp)),
+                            Message::CpuGraph(ProcGraphKind::Temperature),
+                            false,
+                        ));
+                    }
+                    column = column.push(row);
+                }
+                column.into()
+            },
             Some(ProcessCategory::CPU),
             Message::NavPage(NavPage::Cpu),
         ));
@@ -670,14 +803,21 @@ impl App {
             GraphKind::Memory,
             fl!("memory"),
             format!(
-                "{:.1}% / {}",
-                100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
-                humansize::format_size(graph_item.memory.used, humansize::BINARY),
-            ),
-            format!(
                 "{}",
                 humansize::format_size(graph_item.memory.total, humansize::BINARY),
             ),
+            widget::column!(
+                widget::text::body(format!(
+                    "{:.1}%",
+                    100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
+                )),
+                widget::text::body(format!(
+                    "{}",
+                    humansize::format_size(graph_item.memory.used, humansize::BINARY),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             Some(ProcessCategory::Memory),
             Message::NavPage(NavPage::Memory),
         ));
@@ -686,12 +826,19 @@ impl App {
         items.push(card(
             GraphKind::DiskTotal,
             fl!("disk"),
-            format!(
-                "{}/s read / {}/s write",
-                humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
-                humansize::format_size(disk_io.1 as u64, humansize::DECIMAL)
-            ),
             String::new(),
+            widget::column!(
+                widget::text::body(format!(
+                    "{}/s read",
+                    humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
+                )),
+                widget::text::body(format!(
+                    "{}/s write",
+                    humansize::format_size((disk_io.1) as u64, humansize::DECIMAL),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             Some(ProcessCategory::DiskTotal),
             Message::NavPage(NavPage::Disk),
         ));
@@ -700,44 +847,112 @@ impl App {
         items.push(card(
             GraphKind::NetworkTotal,
             fl!("network"),
-            format!(
-                "{}/s rx / {}/s tx",
-                humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
-                humansize::format_size(network_io.1 as u64, humansize::DECIMAL)
-            ),
             String::new(),
+            widget::column!(
+                widget::text::body(format!(
+                    "{}/s rx",
+                    humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
+                )),
+                widget::text::body(format!(
+                    "{}/s tx",
+                    humansize::format_size((network_io.1) as u64, humansize::DECIMAL),
+                ))
+            )
+            .spacing(space_xxxs)
+            .into(),
             None,
             Message::NavPage(NavPage::Network),
         ));
 
         for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
+                let (data, process_category) = match gpu.state {
+                    GpuState::Active | GpuState::Idle(_) => {
+                        let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
+                        {
+                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                            row = row.push(self.tag(
+                                widget::text::body(format!("{:.1}%", usage)),
+                                Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                false,
+                            ));
+                            if let Some(frequency) = gpu.frequency {
+                                row = row.push(self.tag(
+                                    widget::text::body(format_frequency(frequency)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                    false,
+                                ));
+                            }
+                            column = column.push(row);
+                        }
+                        {
+                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
+                            if let Some(power) = gpu.power {
+                                row = row.push(self.tag(
+                                    widget::text::body(format!("{:.1} W", power)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                    false,
+                                ));
+                            }
+                            if let Some(temp) = gpu.temp {
+                                row = row.push(self.tag(
+                                    widget::text::body(format!("{:.1}°C", temp)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
+                                    false,
+                                ));
+                            }
+                            column = column.push(row);
+                        }
+                        (
+                            column.into(),
+                            Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
+                        )
+                    }
+                    GpuState::Suspended => {
+                        (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                    }
+                };
                 items.push(card(
-                    GraphKind::GpuUsage(gpu.id),
+                    GraphKind::Gpu(
+                        gpu.id,
+                        self.gpu_graphs.get(&gpu.id).copied().unwrap_or_default(),
+                    ),
                     fl!("gpu-index", index = gpu_i),
-                    if let Some(temp) = gpu.temp {
-                        format!("{:.1}% / {:.1}°C", usage, temp)
-                    } else {
-                        format!("{:.1}%", usage)
-                    },
                     gpu.name.clone(),
-                    Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
+                    data,
+                    process_category,
                     Message::GpuSelect(gpu_i),
                 ));
             }
             if let Some(vram_used) = gpu.vram_used {
                 if let Some(vram_total) = gpu.vram_total {
+                    let (data, process_category) = match gpu.state {
+                        GpuState::Active | GpuState::Idle(_) => (
+                            widget::column!(
+                                widget::text::body(format!(
+                                    "{:.1}%",
+                                    100.0 * (vram_used as f32) / (vram_total as f32),
+                                ),),
+                                widget::text::body(format!(
+                                    "{} / {}",
+                                    humansize::format_size(vram_used, humansize::BINARY),
+                                    humansize::format_size(vram_total, humansize::BINARY),
+                                ),),
+                            )
+                            .spacing(space_xxxs)
+                            .into(),
+                            Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
+                        ),
+                        GpuState::Suspended => {
+                            (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                        }
+                    };
                     items.push(card(
                         GraphKind::GpuVram(gpu.id),
                         fl!("gpu-vram-index", index = gpu_i),
-                        format!(
-                            "{:.1}% / {}",
-                            100.0 * (vram_used as f32) / (vram_total as f32),
-                            humansize::format_size(vram_used, humansize::BINARY),
-                        ),
-                        //TODO: show vram total format!("{}", humansize::format_size(vram_total, humansize::BINARY)),
                         gpu.name.clone(),
-                        Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
+                        data,
+                        process_category,
                         Message::GpuSelect(gpu_i),
                     ));
                 }
@@ -898,7 +1113,7 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill),
         )
-        .on_press(Message::ProcessSelect(None))
+        .on_press(Message::Select(None))
         .into()
     }
 }
@@ -971,7 +1186,9 @@ impl Application for App {
             config_handler: flags.config_handler,
             context_page: ContextPage::Settings,
             core,
+            cpu_graph: ProcGraphKind::default(),
             dialog_opt: None,
+            gpu_graphs: HashMap::new(),
             gpu_id_opt: None,
             gpu_names: Vec::new(),
             graph_history: VecDeque::new(),
@@ -981,13 +1198,17 @@ impl Application for App {
             processes: Vec::new(),
             process_content: iced::widget::list::Content::new(),
             process_search: (String::new(), None),
-            process_selected: None,
             process_sort: (ProcessCategory::default(), false),
             scroll_header_id: widget::Id::unique(),
             scroll_table_id: widget::Id::unique(),
+            selected: None,
+            size: None,
         };
 
-        let command = Task::batch([app.update_config(), app.set_window_title(fl!("app-name"))]);
+        let command = Task::batch([
+            app.update_config(),
+            app.set_window_title(fl!("app-name"), window::Id::RESERVED),
+        ]);
         (app, command)
     }
 
@@ -1003,7 +1224,7 @@ impl Application for App {
         if self.core.window.show_context {
             return self.update(Message::ToggleContextPage(self.context_page));
         }
-        if self.process_selected.take().is_some() {
+        if self.selected.take().is_some() {
             return Task::none();
         }
         if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
@@ -1014,7 +1235,7 @@ impl Application for App {
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Self::Message> {
         self.nav_model.activate(id);
-        self.process_selected = None;
+        self.selected = None;
         self.update_snapshot();
         Task::none()
     }
@@ -1054,12 +1275,32 @@ impl Application for App {
                     return self.update_config();
                 }
             }
+            Message::CpuGraph(cpu_graph) => {
+                self.cpu_graph = cpu_graph;
+            }
             Message::DialogCancel => {
                 self.dialog_opt = None;
             }
             Message::DialogConfirm => {
                 if let Some(dialog_kind) = self.dialog_opt.take() {
                     match dialog_kind {
+                        DialogKind::AppQuit {
+                            processes, force, ..
+                        } => {
+                            //TODO: show errors?
+                            #[cfg(unix)]
+                            {
+                                for process in processes {
+                                    let Some(pid) = process.pid else { continue };
+                                    if let Ok(pid_c) = pid.as_u32().try_into() {
+                                        let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+                                        unsafe {
+                                            libc::kill(pid_c, sig);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         DialogKind::ProcessQuit { pid, force, .. } => {
                             //TODO: show errors?
                             #[cfg(unix)]
@@ -1077,6 +1318,9 @@ impl Application for App {
             }
             Message::DialogOpen(dialog_kind) => {
                 self.dialog_opt = Some(dialog_kind);
+            }
+            Message::GpuGraph(gpu_id, gpu_graph) => {
+                self.gpu_graphs.insert(gpu_id, gpu_graph);
             }
             Message::GpuSelect(gpu_i) => {
                 self.gpu_id_opt = None;
@@ -1108,7 +1352,7 @@ impl Application for App {
                 }
                 if let Some(id) = id_opt {
                     self.nav_model.activate(id);
-                    self.process_selected = None;
+                    self.selected = None;
                     self.update_snapshot();
                 }
             }
@@ -1123,10 +1367,6 @@ impl Application for App {
                 };
                 self.process_search = (search, regex_opt);
                 self.update_snapshot();
-            }
-            Message::ProcessSelect(process_selected) => {
-                self.process_selected = process_selected;
-                //TODO: reset that item in Contents?
             }
             Message::ProcessSort(category) => {
                 if self.process_sort.0 == category {
@@ -1165,6 +1405,15 @@ impl Application for App {
                 } else {
                     NavPage::Processes
                 }));
+            }
+            Message::Select(selected) => {
+                self.selected = selected;
+                //TODO: reset that item in Contents?
+            }
+            Message::Size(window_id, size) => {
+                if self.core.main_window_id() == Some(window_id) {
+                    self.size = Some(size);
+                }
             }
             Message::Snapshot(graph_item, apps, processes) => {
                 self.graph_snapshot = Some(graph_item);
@@ -1213,22 +1462,50 @@ impl Application for App {
     }
 
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
-        let mut dialog = widget::dialog().secondary_action(
-            widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
-        );
-        match self.dialog_opt.as_ref()? {
-            DialogKind::ProcessQuit { name, force, .. } => {
-                dialog = dialog
+        let element: Element<_> = match self.dialog_opt.as_ref()? {
+            DialogKind::AppQuit {
+                name,
+                processes,
+                force,
+                ..
+            } => {
+                let sort_category = ProcessCategory::Name;
+                let categories = [
+                    ProcessCategory::App,
+                    ProcessCategory::Name,
+                    ProcessCategory::PID,
+                ];
+                let mut table_content = widget::column::with_capacity(processes.len() * 2);
+                for process in processes.iter() {
+                    table_content = table_content
+                        .push(widget::divider::horizontal::default())
+                        .push(table_row(process, &categories, &None));
+                }
+                widget::dialog()
                     .title(if *force {
-                        fl!("force-quit-title")
+                        fl!("force-quit-app-title", name = name)
                     } else {
-                        fl!("quit-title")
+                        fl!("quit-app-title", name = name)
                     })
                     .body(if *force {
-                        fl!("force-quit-body", name = name)
+                        fl!("force-quit-app-body")
                     } else {
-                        fl!("quit-body", name = name)
+                        fl!("quit-app-body")
                     })
+                    .control(widget::column!(
+                        table_header(&categories, sort_category, false, false),
+                        widget::scrollable(table_content).height({
+                            let max_size = self
+                                .size
+                                .map_or(480.0, |size| (size.height - 300.0).min(480.0));
+                            let scrollable_height = processes.len() as f32 * 40.0;
+                            if scrollable_height > max_size {
+                                Length::Fixed(max_size)
+                            } else {
+                                Length::Shrink
+                            }
+                        })
+                    ))
                     .primary_action(
                         widget::button::destructive(if *force {
                             fl!("force-quit")
@@ -1236,17 +1513,92 @@ impl Application for App {
                             fl!("quit")
                         })
                         .on_press(Message::DialogConfirm),
-                    );
+                    )
+                    .secondary_action(
+                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                    )
+                    .into()
             }
-        }
-        Some(dialog.into())
+            DialogKind::ProcessQuit { name, force, .. } => widget::dialog()
+                .title(if *force {
+                    fl!("force-quit-title")
+                } else {
+                    fl!("quit-title")
+                })
+                .body(if *force {
+                    fl!("force-quit-body", name = name)
+                } else {
+                    fl!("quit-body", name = name)
+                })
+                .primary_action(
+                    widget::button::destructive(if *force {
+                        fl!("force-quit")
+                    } else {
+                        fl!("quit")
+                    })
+                    .on_press(Message::DialogConfirm),
+                )
+                .secondary_action(
+                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                )
+                .into(),
+        };
+        Some(element)
     }
 
     fn footer(&self) -> Option<Element<'_, Self::Message>> {
         let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
 
-        let pid = self.process_selected?;
-        let item = self.processes.iter().find(|x| x.pid == Some(pid))?;
+        //TODO: support app selection
+        let (item, force_quit, quit) = match self.selected.as_ref()? {
+            SelectedItem::App(app_id) => {
+                let item = self
+                    .apps
+                    .iter()
+                    .find(|x| x.app.as_ref().map_or(false, |app| &app.id == app_id))?;
+                let processes: Vec<ProcessItem> = self
+                    .processes
+                    .iter()
+                    .filter_map(|x| {
+                        let app = x.app.as_ref()?;
+                        if &app.id == app_id {
+                            Some(x.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (
+                    item,
+                    DialogKind::AppQuit {
+                        name: item.name.clone(),
+                        processes: processes.clone(),
+                        force: true,
+                    },
+                    DialogKind::AppQuit {
+                        name: item.name.clone(),
+                        processes,
+                        force: false,
+                    },
+                )
+            }
+            SelectedItem::Process(pid) => {
+                let item = self.processes.iter().find(|x| x.pid == Some(*pid))?;
+                (
+                    item,
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid: *pid,
+                        force: true,
+                    },
+                    DialogKind::ProcessQuit {
+                        name: item.name.clone(),
+                        pid: *pid,
+                        force: false,
+                    },
+                )
+            }
+        };
         let mut row = widget::row::with_capacity(5)
             .align_y(Alignment::Center)
             .spacing(space_xxs);
@@ -1273,23 +1625,10 @@ impl Application for App {
                 .width(Length::Shrink),
             )
             .push(
-                widget::button::destructive(fl!("force-quit")).on_press(Message::DialogOpen(
-                    DialogKind::ProcessQuit {
-                        name: item.name.clone(),
-                        pid,
-                        force: true,
-                    },
-                )),
+                widget::button::destructive(fl!("force-quit"))
+                    .on_press(Message::DialogOpen(force_quit)),
             )
-            .push(
-                widget::button::standard(fl!("quit")).on_press(Message::DialogOpen(
-                    DialogKind::ProcessQuit {
-                        name: item.name.clone(),
-                        pid,
-                        force: false,
-                    },
-                )),
-            );
+            .push(widget::button::standard(fl!("quit")).on_press(Message::DialogOpen(quit)));
         Some(
             widget::container(row)
                 .padding(space_xxs)
@@ -1389,7 +1728,7 @@ impl Application for App {
                                 move |_i, item| {
                                     widget::column::with_capacity(2)
                                         .push(widget::divider::horizontal::default())
-                                        .push(table_row(item, &categories, &self.process_selected))
+                                        .push(table_row(item, &categories, &self.selected))
                                         .into()
                                 },
                             ))
@@ -1410,7 +1749,7 @@ impl Application for App {
                         .width(Length::Fill)
                         .height(Length::Fill),
                 )
-                .on_press(Message::ProcessSelect(None));
+                .on_press(Message::Select(None));
                 return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
                     widget::id_container(content, id.clone()).into()
                 } else {
@@ -1426,9 +1765,9 @@ impl Application for App {
                 column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::CPU,
                     move || {
-                        widget::column!(
-                            widget::text::title4(fl!("overall-utilization")),
-                            widget::row!(
+                        let mut row = widget::row::with_capacity(3)
+                            .spacing(space_xxs)
+                            .push(self.tag(
                                 widget::column!(
                                     widget::text::body(fl!("utilization")),
                                     widget::text::heading(format!(
@@ -1436,25 +1775,39 @@ impl Application for App {
                                         graph_item.total_cpu_usage()
                                     ))
                                 ),
+                                Message::CpuGraph(ProcGraphKind::Utilization),
+                                true,
+                            ))
+                            .push(self.tag(
                                 widget::column!(
                                     widget::text::body(fl!("speed")),
                                     widget::text::heading(format_frequency(
                                         graph_item.max_cpu_frequency()
                                     ))
                                 ),
-                                if let Some(temp) = graph_item.max_cpu_temp() {
-                                    widget::column!(
-                                        widget::text::body(fl!("temperature")),
-                                        widget::text::heading(format!("{:.1}°C", temp))
-                                    )
-                                } else {
-                                    widget::column!()
-                                }
+                                Message::CpuGraph(ProcGraphKind::Frequency),
+                                true,
+                            ));
+                        //TODO: CPU power
+                        if let Some(temp) = graph_item.max_cpu_temp() {
+                            row = row.push(self.tag(
+                                widget::column!(
+                                    widget::text::body(fl!("temperature")),
+                                    widget::text::heading(format!("{:.1}°C", temp))
+                                ),
+                                Message::CpuGraph(ProcGraphKind::Temperature),
+                                true,
+                            ));
+                        }
+                        widget::column!(
+                            widget::text::title4(fl!("overall-utilization")),
+                            row,
+                            canvas(
+                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
+                                    .legend()
                             )
-                            .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Cpu, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            .height(LARGE_GRAPH_HEIGHT)
+                            .width(Length::Fill),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1617,89 +1970,139 @@ impl Application for App {
                         )
                         .push(widget::space().height(space_m));
                     let mut column = widget::column::with_capacity(2).spacing(space_l);
-                    if let Some(usage) = gpu.usage {
-                        // GPU utilization and top processes
-                        column = column.push(self.responsive_graph_top_processes(
-                            ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
-                            move || {
-                                widget::column!(
-                                    widget::text::title4(fl!("gpu-utilization")),
-                                    widget::row!(
-                                        widget::column!(
-                                            widget::text::body(fl!("utilization")),
-                                            widget::text::heading(format!("{:.1}%", usage))
-                                        ),
-                                        if let Some(temp) = gpu.temp {
+                    match gpu.state {
+                        GpuState::Active | GpuState::Idle(_) => {
+                            if let Some(usage) = gpu.usage {
+                                // GPU utilization and top processes
+                                column = column.push(self.responsive_graph_top_processes(
+                                    ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
+                                    move || {
+                                        let mut row =
+                                            widget::row::with_capacity(4).spacing(space_xxs);
+                                        row = row.push(self.tag(
                                             widget::column!(
-                                                widget::text::body(fl!("temperature")),
-                                                widget::text::heading(format!("{:.1}°C", temp))
-                                            )
-                                        } else {
-                                            widget::column!()
+                                                widget::text::body(fl!("utilization")),
+                                                widget::text::heading(format!("{:.1}%", usage))
+                                            ),
+                                            Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                            true,
+                                        ));
+                                        if let Some(frequency) = gpu.frequency {
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("speed")),
+                                                    widget::text::heading(format_frequency(
+                                                        frequency
+                                                    ))
+                                                ),
+                                                Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                                true,
+                                            ));
                                         }
-                                    )
-                                    .spacing(space_m),
-                                    canvas(
-                                        Graph::new(
-                                            GraphKind::GpuUsage(gpu.id),
-                                            &self.graph_history
-                                        )
-                                        .legend(),
-                                    )
-                                    .height(LARGE_GRAPH_HEIGHT)
-                                    .width(Length::Fill),
-                                )
-                                .spacing(space_xxs)
-                                .into()
-                            },
-                        ));
-                    }
-                    if let Some(vram_used) = gpu.vram_used {
-                        if let Some(vram_total) = gpu.vram_total {
-                            // GPU VRAM and top processes
-                            column = column.push(self.responsive_graph_top_processes(
-                                ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
-                                move || {
-                                    widget::column!(
-                                        widget::text::title4(fl!("gpu-vram")),
-                                        widget::row!(
-                                            widget::column!(
-                                                widget::text::body(fl!("capacity")),
-                                                widget::text::heading(
-                                                    humansize::format_size(
-                                                        vram_total,
-                                                        humansize::BINARY
-                                                    )
-                                                    .to_string()
-                                                )
-                                            ),
-                                            widget::column!(
-                                                widget::text::body(fl!("vram")),
-                                                widget::text::heading(format!(
-                                                    "{} ({:.1}%)",
-                                                    humansize::format_size(
-                                                        vram_used,
-                                                        humansize::BINARY
+                                        if let Some(power) = gpu.power {
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("power")),
+                                                    widget::text::heading(format!(
+                                                        "{:.1} W",
+                                                        power
+                                                    ))
+                                                ),
+                                                Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                                true,
+                                            ));
+                                        }
+                                        if let Some(temp) = gpu.temp {
+                                            row = row.push(self.tag(
+                                                widget::column!(
+                                                    widget::text::body(fl!("temperature")),
+                                                    widget::text::heading(format!("{:.1}°C", temp))
+                                                ),
+                                                Message::GpuGraph(
+                                                    gpu.id,
+                                                    ProcGraphKind::Temperature,
+                                                ),
+                                                true,
+                                            ));
+                                        }
+                                        widget::column!(
+                                            widget::text::title4(fl!("gpu-utilization")),
+                                            row,
+                                            canvas(
+                                                Graph::new(
+                                                    GraphKind::Gpu(
+                                                        gpu.id,
+                                                        self.gpu_graphs
+                                                            .get(&gpu.id)
+                                                            .copied()
+                                                            .unwrap_or_default()
                                                     ),
-                                                    100.0 * (vram_used as f64)
-                                                        / (vram_total as f64)
-                                                ))
-                                            ),
-                                        )
-                                        .spacing(space_m),
-                                        canvas(
-                                            Graph::new(
-                                                GraphKind::GpuVram(gpu.id),
-                                                &self.graph_history
+                                                    &self.graph_history
+                                                )
+                                                .legend(),
                                             )
-                                            .legend(),
+                                            .height(LARGE_GRAPH_HEIGHT)
+                                            .width(Length::Fill),
                                         )
-                                        .height(LARGE_GRAPH_HEIGHT)
-                                        .width(Length::Fill),
-                                    )
-                                    .spacing(space_xxs)
-                                    .into()
-                                },
+                                        .spacing(space_xxs)
+                                        .into()
+                                    },
+                                ));
+                            }
+                            if let Some(vram_used) = gpu.vram_used {
+                                if let Some(vram_total) = gpu.vram_total {
+                                    // GPU VRAM and top processes
+                                    column = column.push(self.responsive_graph_top_processes(
+                                        ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
+                                        move || {
+                                            widget::column!(
+                                                widget::text::title4(fl!("gpu-vram")),
+                                                widget::row!(
+                                                    widget::column!(
+                                                        widget::text::body(fl!("capacity")),
+                                                        widget::text::heading(
+                                                            humansize::format_size(
+                                                                vram_total,
+                                                                humansize::BINARY
+                                                            )
+                                                            .to_string()
+                                                        )
+                                                    ),
+                                                    widget::column!(
+                                                        widget::text::body(fl!("vram")),
+                                                        widget::text::heading(format!(
+                                                            "{} ({:.1}%)",
+                                                            humansize::format_size(
+                                                                vram_used,
+                                                                humansize::BINARY
+                                                            ),
+                                                            100.0 * (vram_used as f64)
+                                                                / (vram_total as f64)
+                                                        ))
+                                                    ),
+                                                )
+                                                .spacing(space_m),
+                                                canvas(
+                                                    Graph::new(
+                                                        GraphKind::GpuVram(gpu.id),
+                                                        &self.graph_history
+                                                    )
+                                                    .legend(),
+                                                )
+                                                .height(LARGE_GRAPH_HEIGHT)
+                                                .width(Length::Fill),
+                                            )
+                                            .spacing(space_xxs)
+                                            .into()
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                        GpuState::Suspended => {
+                            column = column.push(widget::column!(
+                                widget::text::title4(fl!("gpu-suspended-title")),
+                                widget::text::body(fl!("gpu-suspended-description"))
                             ));
                         }
                     }
@@ -1948,7 +2351,7 @@ impl Application for App {
             .width(Length::Fill)
             .height(Length::Fill),
         )
-        .on_press(Message::ProcessSelect(None));
+        .on_press(Message::Select(None));
         if let Some(id) = self.nav_model.active_data::<widget::Id>() {
             widget::id_container(content, id.clone()).into()
         } else {
@@ -1968,6 +2371,13 @@ impl Application for App {
         struct ConfigSubscription;
 
         Subscription::batch([
+            event::listen_with(|event, _status, window_id| match event {
+                Event::Window(WindowEvent::Opened { position: _, size }) => {
+                    Some(Message::Size(window_id, size))
+                }
+                Event::Window(WindowEvent::Resized(s)) => Some(Message::Size(window_id, s)),
+                _ => None,
+            }),
             Subscription::run(info::worker),
             cosmic_config::config_subscription(
                 TypeId::of::<ConfigSubscription>(),

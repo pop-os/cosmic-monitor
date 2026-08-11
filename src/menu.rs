@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::{Action, Config, Message, fl};
 
 pub fn menu_bar<'a>(
-    _core: &Core,
+    core: &Core,
     _config: &Config,
     key_binds: &HashMap<KeyBind, Action>,
 ) -> Element<'a, Message> {
@@ -37,5 +37,7 @@ pub fn menu_bar<'a>(
     .item_height(menu::ItemHeight::Dynamic(40))
     .item_width(menu::ItemWidth::Uniform(320))
     .spacing(theme::active().cosmic().spacing.space_xxxs.into())
+    .window_id_maybe(core.main_window_id())
+    .on_surface_action(Message::Surface)
     .into()
 }
