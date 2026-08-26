@@ -823,11 +823,13 @@ impl App {
         ));
 
         let disk_io = graph_item.total_disk_io();
+        let disk_utilization = graph_item.total_disk_utilization();
         items.push(card(
-            GraphKind::DiskTotal,
+            GraphKind::DiskUtilization,
             fl!("disk"),
             String::new(),
             widget::column!(
+                widget::text::body(format!("{:.1}%", disk_utilization)),
                 widget::text::body(format!(
                     "{}/s read",
                     humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
@@ -2112,19 +2114,24 @@ impl Application for App {
                 }
             }
             (NavPage::Disk, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(1 + graph_item.disks.len())
+                let mut column = widget::column::with_capacity(2 + graph_item.disks.len())
                     .spacing(space_l)
                     .width(Length::Fill);
 
                 let all_used = graph_item.disks.iter().fold(0, |x, disk| x + disk.used);
                 let all_total = graph_item.disks.iter().fold(0, |x, disk| x + disk.total);
                 let all_io = graph_item.total_disk_io();
+                let all_utilization = graph_item.total_disk_utilization();
                 column = column.push(self.responsive_graph_top_processes(
                     ProcessCategory::DiskTotal,
                     move || {
                         widget::column!(
-                            widget::text::title4(fl!("all-disks")),
+                            widget::text::title4(fl!("disk-utilization")),
                             widget::row!(
+                                widget::column!(
+                                    widget::text::body(fl!("utilization")),
+                                    widget::text::heading(format!("{:.1}%", all_utilization))
+                                ),
                                 widget::column!(
                                     widget::text::body(fl!("capacity")),
                                     widget::text::heading(
@@ -2156,14 +2163,44 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            canvas(
+                                Graph::new(GraphKind::DiskUtilization, &self.graph_history)
+                                    .legend()
+                            )
+                            .height(LARGE_GRAPH_HEIGHT)
+                            .width(Length::Fill),
                         )
                         .spacing(space_xxs)
                         .into()
                     },
                 ));
+
+                column = column.push(
+                    widget::column!(
+                        widget::text::title4(fl!("throughput")),
+                        widget::row!(
+                            widget::column!(
+                                widget::text::body(fl!("reading")),
+                                widget::text::heading(format!(
+                                    "{}/s",
+                                    humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
+                                ))
+                            ),
+                            widget::column!(
+                                widget::text::body(fl!("writing")),
+                                widget::text::heading(format!(
+                                    "{}/s",
+                                    humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
+                                ))
+                            ),
+                        )
+                        .spacing(space_m),
+                        canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
+                            .height(LARGE_GRAPH_HEIGHT)
+                            .width(Length::Fill),
+                    )
+                    .spacing(space_xxs),
+                );
 
                 for disk in graph_item.disks.iter() {
                     column = column.push(
