@@ -10,7 +10,23 @@ pub struct DiskItem {
     pub total: u64,
     pub read: f64,
     pub write: f64,
+    pub utilization: f32,
     pub temp: Option<f32>,
+}
+
+pub fn disk_utilization(busy: Duration, elapsed: Duration) -> f32 {
+    if elapsed.is_zero() {
+        return 0.0;
+    }
+
+    (100.0 * busy.as_secs_f32() / elapsed.as_secs_f32()).min(100.0)
+}
+
+pub fn total_disk_utilization(disks: &[DiskItem]) -> f32 {
+    disks
+        .iter()
+        .map(|disk| disk.utilization)
+        .fold(0.0, f32::max)
 }
 
 impl DiskItem {
@@ -23,6 +39,7 @@ impl DiskItem {
             total: disk.total_space(),
             read: (usage.read_bytes as f64) / refresh.as_secs_f64(),
             write: (usage.written_bytes as f64) / refresh.as_secs_f64(),
+            utilization: 0.0,
             temp: None,
         }
     }
