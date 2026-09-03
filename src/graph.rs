@@ -122,6 +122,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         //TODO: design has radius_s but Canvas does not support clipping with border radius
         //let bg_radius = cosmic.radius_s();
         let bg_radius = cosmic.radius_0();
+        let spacing = cosmic.spacing.space_xxs as f32;
 
         let (legend_w, legend_h) = if self.legend {
             (80.0, 20.0)
@@ -158,8 +159,9 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         let min_y = calc_y(scale_y);
         let max_y = calc_y(0.0);
 
+        let size_with_spacing = bounds.size() + Size::new(spacing, spacing);
         //TODO: use cache
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let mut frame = canvas::Frame::new(renderer, size_with_spacing);
 
         let text = |string: &str,
                     position: Point,
@@ -195,7 +197,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         // Draw X axis info
         text(
             "60 secs",
-            Point::new(calc_x(60.0), max_y),
+            Point::new(calc_x(60.0), max_y + spacing),
             Alignment::Left,
             Vertical::Top,
             &mut frame,
@@ -216,7 +218,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
 
             text(
                 string,
-                Point::new(x, max_y),
+                Point::new(x, max_y + spacing),
                 Alignment::Center,
                 Vertical::Top,
                 &mut frame,
@@ -224,7 +226,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         }
         text(
             "0",
-            Point::new(calc_x(0.0), max_y),
+            Point::new(calc_x(0.0), max_y + spacing),
             Alignment::Right,
             Vertical::Top,
             &mut frame,
@@ -233,7 +235,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         // Draw Y axis info
         text(
             &self.kind.label(0.0),
-            Point::new(max_x, calc_y(0.0)),
+            Point::new(max_x + spacing, calc_y(0.0)),
             Alignment::Left,
             Vertical::Bottom,
             &mut frame,
@@ -245,10 +247,9 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 &path,
                 canvas::Stroke::default().with_color(accent_color_0_5),
             );
-
             text(
                 &self.kind.label(value),
-                Point::new(max_x, y),
+                Point::new(max_x + spacing, y),
                 Alignment::Left,
                 Vertical::Center,
                 &mut frame,
@@ -256,7 +257,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         }
         text(
             &self.kind.label(scale_y),
-            Point::new(max_x, calc_y(scale_y)),
+            Point::new(max_x + spacing, calc_y(scale_y)),
             Alignment::Left,
             Vertical::Top,
             &mut frame,
