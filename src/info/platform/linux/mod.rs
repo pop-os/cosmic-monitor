@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use sysinfo::{Components, Disk, Pid, Process, System};
@@ -60,6 +60,21 @@ fn resolve_to_physical(name: &str) -> Option<PathBuf> {
     }
 
     physical
+}
+
+fn disk_busy_time(stats: &str) -> Option<Duration> {
+    stats
+        .split_whitespace()
+        .nth(9)?
+        .parse()
+        .ok()
+        .map(Duration::from_millis)
+}
+
+struct DiskActivity {
+    busy: Duration,
+    sampled_at: Instant,
+    utilization: f32,
 }
 
 struct LinuxProcess {
@@ -125,6 +140,7 @@ impl LinuxProcess {
 pub struct LinuxPlatform {
     amdgpu_ids: HashMap<(u16, u8), String>,
     app_entries: Vec<Arc<AppEntry>>,
+    disk_activity: Mutex<HashMap<PathBuf, DiskActivity>>,
     gpu_energies: HashMap<GpuId, (Instant, u64)>,
     gpu_items: Vec<GpuItem>,
     nvml: Box<dyn Platform>,
@@ -191,6 +207,7 @@ impl LinuxPlatform {
         Self {
             amdgpu_ids,
             app_entries,
+            disk_activity: Mutex::new(HashMap::new()),
             gpu_energies: HashMap::new(),
             gpu_items: Vec::new(),
             #[cfg(feature = "nvml")]
@@ -209,6 +226,38 @@ impl LinuxPlatform {
         let dev_path = resolve_to_physical(&virt_dev_name).unwrap_or(virt_dev_path);
         let dev_name = dev_path.strip_prefix("/dev/").ok()?;
         let sys_class_path = Path::new("/sys/class/block").join(&dev_name);
+
+        if let (Some(busy), Ok(mut disk_activity)) = (
+            fs::read_to_string(sys_class_path.join("stat"))
+                .ok()
+                .and_then(|stats| disk_busy_time(&stats)),
+            self.disk_activity.lock(),
+        ) {
+            let sampled_at = Instant::now();
+            item.utilization = if let Some(previous) = disk_activity.get_mut(&sys_class_path) {
+                let elapsed = sampled_at.saturating_duration_since(previous.sampled_at);
+                // A block device can occur more than once in the mounted-filesystem list. Reuse
+                // its latest sample instead of replacing it with an effectively zero interval.
+                if elapsed >= Duration::from_millis(1) {
+                    previous.utilization =
+                        crate::info::disk_utilization(busy.saturating_sub(previous.busy), elapsed);
+                    previous.busy = busy;
+                    previous.sampled_at = sampled_at;
+                }
+                previous.utilization
+            } else {
+                disk_activity.insert(
+                    sys_class_path.clone(),
+                    DiskActivity {
+                        busy,
+                        sampled_at,
+                        utilization: 0.0,
+                    },
+                );
+                0.0
+            };
+        }
+
         let mut sys_path = fs::canonicalize(&sys_class_path).ok()?;
         // Partitions will be nested inside disk, which is inside device, which is inside subsystem
         // /sys/devices/.../nvme/nvme0/nvme0n1/nvme0n1p1

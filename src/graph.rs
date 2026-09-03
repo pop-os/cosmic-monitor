@@ -26,6 +26,7 @@ pub enum GraphKind<'a> {
     Swap,
     Gpu(GpuId, ProcGraphKind),
     GpuVram(GpuId),
+    DiskUtilization,
     DiskRead(&'a str),
     DiskWrite(&'a str),
     DiskTotal,
@@ -41,7 +42,8 @@ impl<'a> GraphKind<'a> {
             | GraphKind::Memory
             | GraphKind::Swap
             | GraphKind::Gpu(_, ProcGraphKind::Utilization)
-            | GraphKind::GpuVram(_) => {
+            | GraphKind::GpuVram(_)
+            | GraphKind::DiskUtilization => {
                 format!("{:.0}%", value)
             }
             GraphKind::Cpu(ProcGraphKind::Frequency)
@@ -135,7 +137,8 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
             | GraphKind::Memory
             | GraphKind::Swap
             | GraphKind::Gpu(_, ProcGraphKind::Utilization)
-            | GraphKind::GpuVram(_) => 100.0,
+            | GraphKind::GpuVram(_)
+            | GraphKind::DiskUtilization => 100.0,
             _ => {
                 let mut max = 0.0;
                 for graph_item in self.history.iter() {
