@@ -18,22 +18,20 @@ impl CpuItem {
             "AuthenticAMD" => {
                 for component in components {
                     let label = component.label();
-                    if label.starts_with("k10temp") {
-                        if let Some(c_temp) = component.temperature() {
+                    if label.starts_with("k10temp")
+                        && let Some(c_temp) = component.temperature() {
                             temp = Some(temp.map_or(c_temp, |x| c_temp.max(x)));
                         }
-                    }
                 }
             }
             "GenuineIntel" => {
                 //TODO: per-core temp
                 for component in components {
                     let label = component.label();
-                    if label.starts_with("coretemp") {
-                        if let Some(c_temp) = component.temperature() {
+                    if label.starts_with("coretemp")
+                        && let Some(c_temp) = component.temperature() {
                             temp = Some(temp.map_or(c_temp, |x| c_temp.max(x)));
                         }
-                    }
                 }
             }
             //TODO: more CPU vendors
