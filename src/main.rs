@@ -829,12 +829,14 @@ impl App {
             String::new(),
             widget::column!(
                 widget::text::body(format!(
-                    "{}/s read",
+                    "{}/s {}",
                     humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
+                    fl!("read"),
                 )),
                 widget::text::body(format!(
-                    "{}/s write",
+                    "{}/s {}",
                     humansize::format_size((disk_io.1) as u64, humansize::DECIMAL),
+                    fl!("write"),
                 ))
             )
             .spacing(space_xxxs)
