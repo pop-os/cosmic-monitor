@@ -294,7 +294,7 @@ pub enum Message {
     Select(Option<SelectedItem>),
     Size(window::Id, Size),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
-    Surface(surface::Action),
+    Surface(surface::Action<Message>),
     SystemThemeChange,
     ToggleContextPage(ContextPage),
 }
@@ -1422,9 +1422,7 @@ impl Application for App {
                 self.update_snapshot();
             }
             Message::Surface(a) => {
-                return cosmic::task::message(cosmic::Action::Cosmic(
-                    cosmic::app::Action::Surface(a),
-                ));
+                return cosmic::task::message(cosmic::Action::Surface(a));
             }
             Message::SystemThemeChange => {
                 return self.update_config();
