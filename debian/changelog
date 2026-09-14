@@ -1,3 +1,9 @@
+cosmic-monitor (1.9.0) noble; urgency=medium
+
+  * Epoch 1.9.0 version update
+
+ -- Michael Murphy <michael@mmurphy.dev>  Mon, 14 Sep 2026 21:54:49 +0200
+
 cosmic-monitor (1.8.0) noble; urgency=medium
 
   * Epoch 1.8.0 version update
