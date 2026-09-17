@@ -411,14 +411,13 @@ impl App {
 
         let mut i = 0;
         for item in list.iter() {
-            if let Some(regex) = &self.process_search.1 {
-                if !item.matches(&regex) {
+            if let Some(regex) = &self.process_search.1
+                && !item.matches(regex) {
                     continue;
                 }
-            }
             if i >= self.process_content.len() {
                 self.process_content.push(item.clone());
-            } else if self.process_content.get(i) != Some(&item) {
+            } else if self.process_content.get(i) != Some(item) {
                 *self.process_content.get_mut(i).unwrap() = item.clone();
             }
             i += 1;
@@ -802,19 +801,13 @@ impl App {
         items.push(card(
             GraphKind::Memory,
             fl!("memory"),
-            format!(
-                "{}",
-                humansize::format_size(graph_item.memory.total, humansize::BINARY),
-            ),
+            humansize::format_size(graph_item.memory.total, humansize::BINARY).to_string(),
             widget::column!(
                 widget::text::body(format!(
                     "{:.1}%",
                     100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
                 )),
-                widget::text::body(format!(
-                    "{}",
-                    humansize::format_size(graph_item.memory.used, humansize::BINARY),
-                ))
+                widget::text::body(humansize::format_size(graph_item.memory.used, humansize::BINARY).to_string())
             )
             .spacing(space_xxxs)
             .into(),
@@ -924,8 +917,8 @@ impl App {
                     Message::GpuSelect(gpu_i),
                 ));
             }
-            if let Some(vram_used) = gpu.vram_used {
-                if let Some(vram_total) = gpu.vram_total {
+            if let Some(vram_used) = gpu.vram_used
+                && let Some(vram_total) = gpu.vram_total {
                     let (data, process_category) = match gpu.state {
                         GpuState::Active | GpuState::Idle(_) => (
                             widget::column!(
@@ -956,7 +949,6 @@ impl App {
                         Message::GpuSelect(gpu_i),
                     ));
                 }
-            }
         }
 
         let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
@@ -986,7 +978,7 @@ impl App {
         while cols < 4 && graphs_width / ((cols + 1) as f32) > min_width {
             cols += 1;
         }
-        let rows = (items.len() + cols - 1) / cols;
+        let rows = items.len().div_ceil(cols);
         let mut column = widget::column::with_capacity(rows).spacing(space_s);
 
         // Graphs
@@ -1324,11 +1316,10 @@ impl Application for App {
             }
             Message::GpuSelect(gpu_i) => {
                 self.gpu_id_opt = None;
-                if let Some(graph_item) = &self.graph_snapshot {
-                    if let Some(gpu) = graph_item.gpus.get(gpu_i) {
+                if let Some(graph_item) = &self.graph_snapshot
+                    && let Some(gpu) = graph_item.gpus.get(gpu_i) {
                         self.gpu_id_opt = Some(gpu.id);
                     }
-                }
                 return self.update(Message::NavPage(NavPage::Gpu));
             }
             Message::Graph(graph_item) => {
@@ -1555,7 +1546,7 @@ impl Application for App {
                 let item = self
                     .apps
                     .iter()
-                    .find(|x| x.app.as_ref().map_or(false, |app| &app.id == app_id))?;
+                    .find(|x| x.app.as_ref().is_some_and(|app| &app.id == app_id))?;
                 let processes: Vec<ProcessItem> = self
                     .processes
                     .iter()
@@ -2049,8 +2040,8 @@ impl Application for App {
                                     },
                                 ));
                             }
-                            if let Some(vram_used) = gpu.vram_used {
-                                if let Some(vram_total) = gpu.vram_total {
+                            if let Some(vram_used) = gpu.vram_used
+                                && let Some(vram_total) = gpu.vram_total {
                                     // GPU VRAM and top processes
                                     column = column.push(self.responsive_graph_top_processes(
                                         ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
@@ -2097,7 +2088,6 @@ impl Application for App {
                                         },
                                     ));
                                 }
-                            }
                         }
                         GpuState::Suspended => {
                             column = column.push(widget::column!(

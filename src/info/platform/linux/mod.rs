@@ -27,11 +27,10 @@ fn resolve_slave(name: &str) -> Option<PathBuf> {
     let mut slaves = Vec::new();
 
     for entry in slaves_dir.read_dir().ok()? {
-        if let Ok(entry) = entry {
-            if let Ok(name) = entry.file_name().into_string() {
+        if let Ok(entry) = entry
+            && let Ok(name) = entry.file_name().into_string() {
                 slaves.push(name);
             }
-        }
     }
 
     if slaves.len() == 1 {
@@ -50,12 +49,11 @@ fn resolve_to_physical(name: &str) -> Option<PathBuf> {
         let name = physical_c.as_ref().map_or(name, |physical| {
             physical.file_name().unwrap().to_str().unwrap()
         });
-        if let Some(slave) = resolve_slave(name) {
-            if physical.as_ref().map_or(true, |rec| rec != &slave) {
+        if let Some(slave) = resolve_slave(name)
+            && physical.as_ref() != Some(&slave) {
                 physical = Some(slave);
                 continue;
             }
-        }
         break;
     }
 
@@ -204,11 +202,11 @@ impl LinuxPlatform {
 
     fn update_disk(&self, disk: &Disk, item: &mut DiskItem, components: &Components) -> Option<()> {
         let orig_dev_path = disk.name();
-        let virt_dev_path = fs::canonicalize(&orig_dev_path).ok()?;
+        let virt_dev_path = fs::canonicalize(orig_dev_path).ok()?;
         let virt_dev_name = virt_dev_path.strip_prefix("/dev/").ok()?.to_string_lossy();
         let dev_path = resolve_to_physical(&virt_dev_name).unwrap_or(virt_dev_path);
         let dev_name = dev_path.strip_prefix("/dev/").ok()?;
-        let sys_class_path = Path::new("/sys/class/block").join(&dev_name);
+        let sys_class_path = Path::new("/sys/class/block").join(dev_name);
         let mut sys_path = fs::canonicalize(&sys_class_path).ok()?;
         // Partitions will be nested inside disk, which is inside device, which is inside subsystem
         // /sys/devices/.../nvme/nvme0/nvme0n1/nvme0n1p1
@@ -304,13 +302,11 @@ impl Platform for LinuxPlatform {
                 let device_path = drm_path.join("device");
 
                 let mut id_opt = None;
-                if let Ok(link_path) = fs::read_link(&device_path) {
-                    if let Some(link_name) = link_path.file_name() {
-                        if let Some(link_str) = link_name.to_str() {
+                if let Ok(link_path) = fs::read_link(&device_path)
+                    && let Some(link_name) = link_path.file_name()
+                        && let Some(link_str) = link_name.to_str() {
                             id_opt = GpuId::parse_pci(link_str);
                         }
-                    }
-                }
 
                 let name_from_pci_ids = || -> Result<String, Box<dyn std::error::Error>> {
                     let vendor_str = fs::read_to_string(device_path.join("vendor"))?;
@@ -420,11 +416,10 @@ impl Platform for LinuxPlatform {
                         let Ok(entry) = entry_res else { continue };
 
                         // Check for frequency info
-                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input")) {
-                            if let Ok(hz) = data.trim().parse::<u64>() {
+                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input"))
+                            && let Ok(hz) = data.trim().parse::<u64>() {
                                 gpu_item.frequency = Some(hz / 1_000_000);
                             }
-                        }
 
                         // Check for power info
                         if let Ok(data) = fs::read_to_string(entry.path().join("energy1_input")) {
@@ -433,14 +428,12 @@ impl Platform for LinuxPlatform {
                                 let time = Instant::now();
                                 if let Some((last_time, last_microjoules)) =
                                     self.gpu_energies.insert(gpu_item.id, (time, microjoules))
-                                {
-                                    if let Some(duration) = time.checked_duration_since(last_time) {
+                                    && let Some(duration) = time.checked_duration_since(last_time) {
                                         let microwatts = (microjoules.wrapping_sub(last_microjoules)
                                             as f32)
                                             / duration.as_secs_f32();
                                         gpu_item.power = Some(microwatts / 1_000_000.0);
                                     }
-                                }
                             }
                         } else if let Ok(data) =
                             fs::read_to_string(entry.path().join("power1_average"))
@@ -498,7 +491,7 @@ impl Platform for LinuxPlatform {
             let calc_usage = gpu_item.usage.is_none();
             let calc_vram = gpu_item.vram_used.is_none();
             if calc_usage || calc_vram {
-                for (_pid, process) in self.processes.iter() {
+                for process in self.processes.values() {
                     if let Some(usage) = process.gpu_usages.get(&gpu_item.id) {
                         if calc_usage {
                             gpu_item.usage = Some(gpu_item.usage.map_or(usage.0, |x| x + usage.0));
@@ -530,25 +523,22 @@ impl Platform for LinuxPlatform {
             let proc_args = process.cmd();
 
             // Handle flatpaks
-            match group_entry_from_path(
+            if let Ok(Some(name)) = group_entry_from_path(
                 format!("/proc/{}/root/.flatpak-info", process.pid()),
                 "Application",
                 "name",
             ) {
-                Ok(Some(name)) => {
-                    for app in self.app_entries.iter() {
-                        if app.id == name {
-                            return Some(app.clone());
-                        }
+                for app in self.app_entries.iter() {
+                    if app.id == name {
+                        return Some(app.clone());
                     }
                 }
-                _ => {}
             }
 
-            let proc_cmd = proc_args.get(0).and_then(|x| x.to_str())?;
+            let proc_cmd = proc_args.first().and_then(|x| x.to_str())?;
             let proc_exe = process.exe().and_then(|x| x.to_str())?;
             for app in self.app_entries.iter() {
-                let Some(cmd) = app.args.get(0) else { continue };
+                let Some(cmd) = app.args.first() else { continue };
                 if proc_cmd == cmd || proc_exe == cmd {
                     return Some(app.clone());
                 }
