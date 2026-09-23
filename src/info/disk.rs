@@ -22,13 +22,6 @@ pub fn disk_utilization(busy: Duration, elapsed: Duration) -> f32 {
     (100.0 * busy.as_secs_f32() / elapsed.as_secs_f32()).min(100.0)
 }
 
-pub fn total_disk_utilization(disks: &[DiskItem]) -> f32 {
-    disks
-        .iter()
-        .map(|disk| disk.utilization)
-        .fold(0.0, f32::max)
-}
-
 impl DiskItem {
     pub fn new(disk: &Disk, refresh: Duration) -> Self {
         let usage = disk.usage();

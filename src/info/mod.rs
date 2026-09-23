@@ -136,7 +136,10 @@ impl GraphItem {
     }
 
     pub fn total_disk_utilization(&self) -> f32 {
-        total_disk_utilization(&self.disks)
+        self.disks
+            .iter()
+            .map(|disk| disk.utilization)
+            .fold(0.0, f32::max)
     }
 
     pub fn total_network_io(&self) -> (f64, f64) {
