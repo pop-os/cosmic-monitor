@@ -55,8 +55,10 @@ vram = VRAM
 
 ## Disk
 all-disks = All disks
+disk-utilization = Disk utilization
 mount-path = Mount path
 reading = Reading
+throughput = Throughput
 writing = Writing
 
 ## Network
