@@ -2334,7 +2334,11 @@ impl Application for App {
                 }
                 column.into()
             }
+            // The animated loading indicator can lag the UI when not using WGPU
+            #[cfg(feature = "wgpu")]
             _ => widget::indeterminate_circular().into(),
+            #[cfg(not(feature = "wgpu"))]
+            _ => widget::space().into(),
         };
         let content = widget::mouse_area(
             widget::column!(
