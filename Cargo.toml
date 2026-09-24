@@ -39,7 +39,7 @@ pciid-parser = "0.8"
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
-features = ["about", "surface-message", "tokio", "winit"]
+features = ["about", "multi-window", "surface-message", "tokio", "winit"]
 
 [build-dependencies]
 xdgen = "0.1"
@@ -49,7 +49,7 @@ default = ["dbus-config", "nvml", "wayland", "wgpu"]
 dbus-config = ["libcosmic/dbus-config"]
 nvml = ["dep:nvml-wrapper"]
 wgpu = ["libcosmic/wgpu"]
-wayland = ["libcosmic/wayland", "libcosmic/multi-window"]
+wayland = ["libcosmic/wayland"]
 
 [profile.release-with-debug]
 inherits = "release"
