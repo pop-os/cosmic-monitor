@@ -359,24 +359,22 @@ impl ProcessItem {
             ProcessCategory::PID,
             self.pid.map(|x| x.to_string()).unwrap_or_default(),
         );
-        //TODO: translate
         self.strings.insert(
             ProcessCategory::Priority,
             self.priority
-                .map_or("N/A", |x| {
+                .map_or("N/A".to_string(), |x| {
                     if x < -7 {
-                        "Very high"
+                        fl!("very-high")
                     } else if x < -2 {
-                        "High"
+                        fl!("high")
                     } else if x < 3 {
-                        "Normal"
+                        fl!("normal")
                     } else if x < 7 {
-                        "Low"
+                        fl!("low")
                     } else {
-                        "Very low"
+                        fl!("very-low")
                     }
-                })
-                .to_string(),
+                }),
         );
     }
 
