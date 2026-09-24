@@ -2044,7 +2044,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -5261,7 +5261,7 @@ dependencies = [
 [[package]]
 name = "sysinfo"
 version = "0.39.2"
-source = "git+https://github.com/jackpot51/sysinfo.git?branch=redox-0.39#18046613e795d668474cabccdb514d4b1b2ac585"
+source = "git+https://github.com/jackpot51/sysinfo.git?branch=redox-0.39#f9c9267402f026a1c1be2062745cc281cee6e094"
 dependencies = [
  "libc",
  "memchr",
