@@ -72,7 +72,7 @@ impl GraphItem {
         let disk_list = disks.list();
         let mut disk_items = Vec::with_capacity(disk_list.len());
         for disk in disk_list {
-            disk_items.push(platform.disk_item(disk, refresh, &components));
+            disk_items.push(platform.disk_item(disk, refresh, components));
         }
 
         let network_list = networks.list();
@@ -95,7 +95,7 @@ impl GraphItem {
             cpus: cpu_items,
             disks: disk_items,
             gpus: platform.gpus(),
-            memory: MemoryItem::new(&sys),
+            memory: MemoryItem::new(sys),
             networks: network_items,
         }
     }
@@ -343,7 +343,7 @@ pub fn worker() -> impl Stream<Item = Message> {
                     let processes = sys.processes();
                     let mut apps = HashMap::new();
                     let mut process_items = Vec::with_capacity(processes.len());
-                    for (_pid, process) in processes.iter() {
+                    for process in processes.values() {
                         // Do not show threads
                         if process.thread_kind().is_some() {
                             continue;

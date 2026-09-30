@@ -97,17 +97,16 @@ fn main() {
                 && libc::major(metadata.st_rdev()) == 226
             {
                 let name = entry.file_name();
-                if let Ok(data) = fs::read_to_string(proc_fdinfo_path.join(&name)) {
-                    if let Some(fdinfo) = DrmFdInfo::new(&data) {
+                if let Ok(data) = fs::read_to_string(proc_fdinfo_path.join(&name))
+                    && let Some(fdinfo) = DrmFdInfo::new(&data) {
                         let minor = libc::minor(metadata.st_rdev());
                         // Only one (minor device number, drm client id) pair is inserted to avoid duplicates
                         fdinfos
                             .entry(pid)
-                            .or_insert_with(|| BTreeMap::new())
+                            .or_insert_with(BTreeMap::new)
                             .entry((minor, fdinfo.client_id))
                             .or_insert(fdinfo);
                     }
-                }
             }
         }
     };
@@ -122,8 +121,8 @@ fn main() {
         fdinfos_from_proc_path(pid, &proc_path);
         count += 1;
     }
-    if count == 0 {
-        if let Ok(entries) = fs::read_dir("/proc") {
+    if count == 0
+        && let Ok(entries) = fs::read_dir("/proc") {
             for entry_res in entries {
                 let Ok(entry) = entry_res else { continue };
                 let file_name = entry.file_name();
@@ -138,7 +137,6 @@ fn main() {
                 count += 1;
             }
         }
-    }
     let elapsed = instant.elapsed();
 
     let instant = Instant::now();

@@ -114,7 +114,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
     ) -> Vec<canvas::Geometry> {
         let cosmic = theme.cosmic();
         let accent_color = Color::from(cosmic.accent_color());
-        let mut accent_color_0_5 = accent_color.clone();
+        let mut accent_color_0_5 = accent_color;
         accent_color_0_5.a *= 0.5;
         let bg_component_color = Color::from(cosmic.bg_component_color());
         let bg_component_divider = Color::from(cosmic.bg_component_divider());
@@ -141,7 +141,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
                 for graph_item in self.history.iter() {
                     max = graph_item.value(self.kind).max(max);
                 }
-                10.0f32.powf(max.log10().ceil().max(2.0) as f32)
+                10.0f32.powf(max.log10().ceil().max(2.0))
             }
         };
 
@@ -267,12 +267,12 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
             .history
             .front()
             .map(|x| x.time)
-            .unwrap_or_else(|| Instant::now());
+            .unwrap_or_else(Instant::now);
         let end = self
             .history
             .back()
             .map(|x| x.time)
-            .unwrap_or_else(|| Instant::now());
+            .unwrap_or_else(Instant::now);
         let mut area = canvas::path::Builder::new();
         let mut line = canvas::path::Builder::new();
         area.move_to(Point::new(

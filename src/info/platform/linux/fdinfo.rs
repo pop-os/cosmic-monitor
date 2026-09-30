@@ -28,13 +28,12 @@ impl FdInfo {
                     && libc::major(metadata.st_rdev()) == 226
                 {
                     let name = entry.file_name();
-                    if let Ok(data) = fs::read_to_string(proc_fdinfo_path.join(&name)) {
-                        if let Some(fdinfo) = Self::new(&data) {
+                    if let Ok(data) = fs::read_to_string(proc_fdinfo_path.join(&name))
+                        && let Some(fdinfo) = Self::new(&data) {
                             let minor = libc::minor(metadata.st_rdev());
                             // Only one (minor device number, drm client id) pair is inserted to avoid duplicates
                             fdinfos.entry((minor, fdinfo.client_id)).or_insert(fdinfo);
                         }
-                    }
                 }
             }
         }
