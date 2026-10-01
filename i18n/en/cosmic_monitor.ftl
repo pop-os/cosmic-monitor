@@ -20,14 +20,19 @@ gpu-vram = GPU VRAM
 
 ## Processes
 app = App
-name = Name
 disk-read = Disk read
 disk-write = Disk write
 gpu-index = GPU {$index}
 gpu-vram-index = GPU {$index} VRAM
+high = High
+low = Low
+name = Name
+normal = Normal
 pid = PID
 priority = Priority
 search-processes = Search by name, PID, or username
+very-high = Very high
+very-low = Very low
 user = User
 
 ## CPU
@@ -56,7 +61,9 @@ vram = VRAM
 ## Disk
 all-disks = All disks
 mount-path = Mount path
+read = read
 reading = Reading
+write = write
 writing = Writing
 
 ## Network
