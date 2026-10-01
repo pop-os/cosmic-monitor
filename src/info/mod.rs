@@ -135,6 +135,13 @@ impl GraphItem {
         total
     }
 
+    pub fn total_disk_utilization(&self) -> f32 {
+        self.disks
+            .iter()
+            .map(|disk| disk.utilization)
+            .fold(0.0, f32::max)
+    }
+
     pub fn total_network_io(&self) -> (f64, f64) {
         let mut total = (0.0, 0.0);
         for network in self.networks.iter() {
@@ -194,6 +201,7 @@ impl GraphItem {
                 }
                 total
             }
+            GraphKind::DiskUtilization => self.total_disk_utilization(),
             GraphKind::DiskRead(disk_name) => {
                 let mut total = 0.0;
                 for disk in self.disks.iter().filter(|x| x.name == disk_name) {
