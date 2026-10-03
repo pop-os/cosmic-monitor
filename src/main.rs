@@ -628,16 +628,23 @@ impl App {
         .into()
     }
 
+    fn side_padding(&self) -> u16 {
+        if self.core.is_condensed() {
+            theme::spacing().space_s
+        } else {
+            theme::spacing().space_l
+        }
+    }
+
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
-            space_xl,
             space_s,
             space_xs,
             space_xxs,
             space_xxxs,
             ..
         } = theme::active().cosmic().spacing;
-
+        let padding = self.side_padding();
         let card = |graph_kind,
                     name,
                     caption,
@@ -974,7 +981,7 @@ impl App {
 
         let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
         let min_width = 440.0;
-        let content_width = size.width - (space_xl * 2) as f32;
+        let content_width = size.width - (padding * 2) as f32;
         enum DashboardLayout {
             Small,
             Medium,
@@ -1120,7 +1127,7 @@ impl App {
         widget::mouse_area(
             widget::scrollable(
                 widget::container(content)
-                    .padding([0, space_xl, space_s, space_xl])
+                    .padding([0, padding, space_s, padding])
                     .width(Length::Fill),
             )
             .width(Length::Fill)
@@ -1242,7 +1249,10 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
@@ -1674,7 +1684,6 @@ impl Application for App {
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
             space_xxl,
-            space_xl,
             space_l,
             space_m,
             space_s,
@@ -1682,12 +1691,12 @@ impl Application for App {
             space_xxs,
             ..
         } = theme::active().cosmic().spacing;
-
+        let padding = self.side_padding();
         let nav_page = self
             .nav_model
             .active_data::<NavPage>()
             .map_or(NavPage::Dashboard, |x| *x);
-        let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
+        let mut page_header = widget::column::with_capacity(6).padding([0, padding]);
         page_header = page_header
             .push(
                 widget::button::text(fl!("dashboard"))
@@ -1760,13 +1769,11 @@ impl Application for App {
                     let header =
                         table_header(&categories, self.process_sort.0, self.process_sort.1, true);
                     widget::column!(
-                        iced::widget::scrollable(
-                            header.padding([0, space_xl, 0, space_xl]).width(width),
-                        )
-                        .direction(Direction::Horizontal(Scrollbar::hidden()))
-                        .id(self.scroll_header_id.clone())
-                        .on_scroll(Message::ScrollHeader)
-                        .width(Length::Fill),
+                        iced::widget::scrollable(header.padding([0, padding]).width(width))
+                            .direction(Direction::Horizontal(Scrollbar::hidden()))
+                            .id(self.scroll_header_id.clone())
+                            .on_scroll(Message::ScrollHeader)
+                            .width(Length::Fill),
                         widget::scrollable(
                             widget::container(iced::widget::List::new(
                                 &self.process_content,
@@ -1777,7 +1784,7 @@ impl Application for App {
                                         .into()
                                 },
                             ))
-                            .padding([0, space_xl, 0, space_xl])
+                            .padding([0, padding])
                             .width(width),
                         )
                         .direction(direction)
@@ -2392,7 +2399,7 @@ impl Application for App {
                 page_header,
                 widget::scrollable(
                     widget::container(content)
-                        .padding([0, space_xl, space_s, space_xl])
+                        .padding([0, padding, space_s, padding])
                         .width(Length::Fill)
                 )
                 .width(Length::Fill),
