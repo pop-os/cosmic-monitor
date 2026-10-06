@@ -198,6 +198,7 @@ fn table_row<'a>(
         }
         row = row.push(
             widget::container(cat_row)
+                .style(|_| widget::container::Style::default())
                 .align_x(category.data_align())
                 .align_y(Alignment::Center)
                 .padding([0, 8])
