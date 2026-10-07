@@ -3,7 +3,7 @@
 
 use clap_lex::RawArgs;
 use cosmic::{
-    Application, ApplicationExt, Element,
+    Application, ApplicationExt, Apply, Element,
     app::{Core, Settings, Task, context_drawer},
     cosmic_config::{self, CosmicConfigEntry},
     cosmic_theme, executor,
@@ -44,7 +44,7 @@ mod config;
 use graph::{Graph, GraphKind};
 mod graph;
 
-use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
+use info::{GpuId, GpuItem, GpuState, GraphItem, ProcessCategory, ProcessItem};
 mod info;
 
 mod localize;
@@ -116,12 +116,40 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn format_bytes(bytes: u64) -> String {
+    humansize::format_size(bytes, humansize::BINARY)
+}
+
 fn format_frequency(mhz: u64) -> String {
     if mhz >= 1000 {
         format!("{:.2} GHz", (mhz as f64) / 1000.0)
     } else {
         format!("{} MHz", mhz)
     }
+}
+
+fn format_percent(used: u64, total: u64) -> String {
+    format!("{:.1}%", 100.0 * (used as f64) / (total as f64))
+}
+
+fn format_rate(bytes: u64) -> String {
+    format!("{}/s", humansize::format_size(bytes, humansize::DECIMAL))
+}
+
+fn format_used(used: u64, total: u64) -> String {
+    format!("{} ({})", format_bytes(used), format_percent(used, total))
+}
+
+fn stat<'a>(label: String, value: String) -> Element<'a, Message> {
+    widget::column!(widget::text::body(label), widget::text::heading(value)).into()
+}
+
+fn stats_row(stats: Vec<Element<'_, Message>>) -> widget::FlexRow<'_, Message> {
+    widget::flex_row(stats).column_spacing(theme::spacing().space_m)
+}
+
+fn tags_row(tags: Vec<Element<'_, Message>>) -> widget::FlexRow<'_, Message> {
+    widget::flex_row(tags).spacing(theme::spacing().space_xxs)
 }
 
 fn print_help() {
@@ -144,29 +172,27 @@ fn table_header(
 ) -> widget::Row<'static, Message, cosmic::Theme> {
     let mut header = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
     for &category in categories {
-        let mut cat_row = widget::row::with_capacity(2).align_y(Alignment::Center);
-        cat_row = cat_row.push(widget::text::heading(category.to_string()));
-        if category == sort_category {
-            cat_row = cat_row.push(
+        let cat_row = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .push(widget::text::heading(category.to_string()))
+            .push_maybe((category == sort_category).then(|| {
                 widget::icon::from_name(if sort_direction {
                     "pan-up-symbolic"
                 } else {
                     "pan-down-symbolic"
                 })
-                .size(16),
-            );
-        }
-        let container = widget::container(cat_row)
+                .size(16)
+            }))
+            .apply(widget::container)
             .align_x(category.data_align())
-            .align_y(Alignment::Center)
-            .padding([0, 8])
-            .height(Length::Fixed(40.0))
-            .width(category.width());
+            .center_y(40)
+            .width(category.width())
+            .padding([0, 8]);
         if sortable {
             header =
-                header.push(widget::mouse_area(container).on_press(Message::ProcessSort(category)));
+                header.push(widget::mouse_area(cat_row).on_press(Message::ProcessSort(category)));
         } else {
-            header = header.push(container);
+            header = header.push(cat_row);
         }
     }
     header
@@ -177,33 +203,27 @@ fn table_row<'a>(
     categories: &[ProcessCategory],
     selected: &Option<SelectedItem>,
 ) -> Element<'a, Message> {
-    let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+    let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
 
     let mut row = widget::row::with_capacity(categories.len()).align_y(Alignment::Center);
     for &category in categories {
-        let mut cat_row = widget::row::with_capacity(2)
-            .align_y(Alignment::Center)
-            .spacing(space_xxs);
-        if let Some(icon) = item.get_icon(category) {
-            cat_row = cat_row.push(icon);
-        }
         let text = item.text(category);
-        if !text.is_empty() {
-            cat_row = cat_row.push(
+        let cat_row = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .spacing(space_xxs)
+            .push_maybe(item.get_icon(category))
+            .push_maybe((!text.is_empty()).then(|| {
                 widget::text(text)
                     .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
                     //TODO: should basic shaping only be used on some columns?
-                    .shaping(Shaping::Basic),
-            );
-        }
-        row = row.push(
-            widget::container(cat_row)
-                .align_x(category.data_align())
-                .align_y(Alignment::Center)
-                .padding([0, 8])
-                .height(Length::Fixed(40.0))
-                .width(category.width()),
-        );
+                    .shaping(Shaping::Basic)
+            }))
+            .apply(widget::container)
+            .align_x(category.data_align())
+            .center_y(40)
+            .width(category.width())
+            .padding([0, 8]);
+        row = row.push(cat_row);
     }
     let mut container = widget::container(row);
     let item_selected = item.as_selected();
@@ -469,7 +489,7 @@ impl App {
     ) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
             space_xxl, space_l, ..
-        } = theme::active().cosmic().spacing;
+        } = theme::spacing();
 
         widget::responsive(move |size| {
             let graph = f();
@@ -505,7 +525,7 @@ impl App {
             space_xxs,
             space_xxxs,
             ..
-        } = theme::active().cosmic().spacing;
+        } = theme::spacing();
 
         let selected = match message {
             Message::CpuGraph(cpu_graph) => self.cpu_graph == cpu_graph,
@@ -574,8 +594,6 @@ impl App {
         sortable: bool,
         count: usize,
     ) -> Element<'a, Message> {
-        let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
-
         let categories = ProcessCategory::for_top_processes(sort_category);
         let mut column = widget::column::with_capacity(count + 2);
         column = column.push(table_header(
@@ -598,11 +616,10 @@ impl App {
                 a.compare(b, sort_category)
             }
         }) {
-            column = column.push(
-                widget::column::with_capacity(2)
-                    .push(widget::divider::horizontal::default())
-                    .push(table_row(item, &categories, &self.selected)),
-            );
+            column = column.push(widget::column!(
+                widget::divider::horizontal::default(),
+                table_row(item, &categories, &self.selected)
+            ));
         }
         column = column.push(widget::divider::horizontal::default());
         widget::column!(
@@ -624,20 +641,368 @@ impl App {
                 sort_direction
             )),
         )
-        .spacing(space_xxs)
+        .spacing(theme::spacing().space_xxs)
         .into()
+    }
+
+    fn large_graph<'a>(&'a self, graph_kind: GraphKind<'a>) -> Element<'a, Message> {
+        canvas(Graph::new(graph_kind, &self.graph_history).legend())
+            .height(LARGE_GRAPH_HEIGHT)
+            .width(Length::Fill)
+            .into()
+    }
+
+    fn titled_graph<'a>(
+        &'a self,
+        title: String,
+        graph_kind: GraphKind<'a>,
+    ) -> Element<'a, Message> {
+        widget::column!(widget::text::title4(title), self.large_graph(graph_kind))
+            .spacing(theme::spacing().space_xxs)
+            .into()
+    }
+
+    fn graph_section<'a>(
+        &'a self,
+        title: String,
+        stats: impl Into<Element<'a, Message>>,
+        graph_kind: GraphKind<'a>,
+    ) -> Element<'a, Message> {
+        widget::column!(
+            widget::text::title4(title),
+            stats.into(),
+            self.large_graph(graph_kind),
+        )
+        .spacing(theme::spacing().space_xxs)
+        .into()
+    }
+
+    fn view_cpu<'a>(&'a self, graph_item: &'a GraphItem) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_l,
+            space_m,
+            space_xs,
+            space_xxs,
+            ..
+        } = theme::spacing();
+        let mut column = widget::column::with_capacity(2)
+            .spacing(space_l)
+            .width(Length::Fill);
+
+        // Overall utilization and top processes
+        column = column.push(self.responsive_graph_top_processes(
+            ProcessCategory::CPU,
+            move || {
+                //TODO: CPU power
+                let mut tags = Vec::with_capacity(3);
+                tags.extend([
+                    self.tag(
+                        stat(
+                            fl!("utilization"),
+                            format!("{:.1}%", graph_item.total_cpu_usage()),
+                        ),
+                        Message::CpuGraph(ProcGraphKind::Utilization),
+                        true,
+                    ),
+                    self.tag(
+                        stat(
+                            fl!("speed"),
+                            format_frequency(graph_item.max_cpu_frequency()),
+                        ),
+                        Message::CpuGraph(ProcGraphKind::Frequency),
+                        true,
+                    ),
+                ]);
+                if let Some(temp) = graph_item.max_cpu_temp() {
+                    tags.push(self.tag(
+                        stat(fl!("temperature"), format!("{:.1}°C", temp)),
+                        Message::CpuGraph(ProcGraphKind::Temperature),
+                        true,
+                    ))
+                }
+                self.graph_section(
+                    fl!("overall-utilization"),
+                    tags_row(tags),
+                    GraphKind::Cpu(self.cpu_graph),
+                )
+            },
+        ));
+
+        // Utilization per core
+        let mut children = Vec::with_capacity(graph_item.cpus.len());
+        for cpu in graph_item.cpus.iter() {
+            children.push(
+                widget::column!(
+                    widget::row!(
+                        widget::text::heading(&cpu.name),
+                        widget::space().width(Length::Fill),
+                        widget::text::body(format_frequency(cpu.frequency)).align_x(Alignment::End),
+                    )
+                    .width(200.0 + 48.0),
+                    widget::row!(
+                        widget::determinate_linear(cpu.usage / 100.0)
+                            .girth(12.0)
+                            .width(200.0),
+                        widget::text(format!("{:.1}%", cpu.usage))
+                            .align_x(Alignment::End)
+                            .width(48.0),
+                    )
+                    .align_y(Alignment::Center)
+                )
+                .into(),
+            );
+        }
+        column = column.push(
+            widget::column!(
+                widget::text::title4(fl!("utilization-per-core")),
+                widget::flex_row(children)
+                    .column_spacing(space_m)
+                    .row_spacing(space_xs)
+            )
+            .spacing(space_xxs),
+        );
+
+        column.into()
+    }
+
+    fn view_memory<'a>(&'a self, graph_item: &'a GraphItem) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_xxl, space_l, ..
+        } = theme::spacing();
+        let mem = &graph_item.memory;
+
+        let mut column = widget::column::with_capacity(2)
+            .spacing(space_l)
+            .width(Length::Fill);
+
+        // Memory information and top processes
+        column = column.push(self.responsive_graph_top_processes(
+            ProcessCategory::Memory,
+            move || {
+                let stats = stats_row(vec![
+                    stat(fl!("capacity"), format_bytes(mem.total)),
+                    stat(fl!("in-use"), format_used(mem.used, mem.total)),
+                    stat(fl!("cache"), format_used(mem.cache, mem.total)),
+                    stat(
+                        fl!("total-utilization"),
+                        format_used(mem.used + mem.cache, mem.total),
+                    ),
+                ]);
+                self.graph_section(fl!("memory-usage"), stats, GraphKind::Memory)
+            },
+        ));
+
+        // Swap information (responsive, but no top processes)
+        column = column.push(widget::responsive(move |size| {
+            let stats = stats_row(vec![
+                stat(fl!("capacity"), format_bytes(mem.swap_total)),
+                stat(fl!("in-use"), format_used(mem.swap_used, mem.swap_total)),
+            ]);
+            let graph = self.graph_section(fl!("swap-usage"), stats, GraphKind::Swap);
+            if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
+                widget::row!(graph, widget::space().width(MIN_PROCESSES_WIDTH))
+                    .spacing(space_xxl)
+                    .into()
+            } else {
+                graph
+            }
+        }));
+
+        column.into()
+    }
+
+    fn view_gpu<'a>(&'a self, gpu: &'a GpuItem, gpu_i: usize) -> Element<'a, Message> {
+        let mut column = widget::column::with_capacity(2).spacing(theme::spacing().space_l);
+        match gpu.state {
+            GpuState::Active | GpuState::Idle(_) => {
+                if let Some(usage) = gpu.usage {
+                    // GPU utilization and top processes
+                    column = column.push(self.responsive_graph_top_processes(
+                        ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
+                        move || {
+                            let mut tags = Vec::with_capacity(4);
+                            tags.push(self.tag(
+                                stat(fl!("utilization"), format!("{:.1}%", usage)),
+                                Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                true,
+                            ));
+                            if let Some(frequency) = gpu.frequency {
+                                tags.push(self.tag(
+                                    stat(fl!("speed"), format_frequency(frequency)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                    true,
+                                ));
+                            }
+                            if let Some(power) = gpu.power {
+                                tags.push(self.tag(
+                                    stat(fl!("power"), format!("{:.1} W", power)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                    true,
+                                ));
+                            }
+                            if let Some(temp) = gpu.temp {
+                                tags.push(self.tag(
+                                    stat(fl!("temperature"), format!("{:.1}°C", temp)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
+                                    true,
+                                ));
+                            }
+                            self.graph_section(
+                                fl!("gpu-utilization"),
+                                tags_row(tags),
+                                GraphKind::Gpu(
+                                    gpu.id,
+                                    self.gpu_graphs.get(&gpu.id).copied().unwrap_or_default(),
+                                ),
+                            )
+                        },
+                    ));
+                }
+                if let (Some(vram_used), Some(vram_total)) = (gpu.vram_used, gpu.vram_total) {
+                    // GPU VRAM and top processes
+                    column = column.push(self.responsive_graph_top_processes(
+                        ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
+                        move || {
+                            let stats = stats_row(vec![
+                                stat(fl!("capacity"), format_bytes(vram_total)),
+                                stat(fl!("vram"), format_used(vram_used, vram_total)),
+                            ]);
+                            self.graph_section(fl!("gpu-vram"), stats, GraphKind::GpuVram(gpu.id))
+                        },
+                    ));
+                }
+            }
+            GpuState::Suspended => {
+                column = column.push(widget::column!(
+                    widget::text::title4(fl!("gpu-suspended-title")),
+                    widget::text::body(fl!("gpu-suspended-description"))
+                ));
+            }
+        }
+        column.into()
+    }
+
+    fn view_disk<'a>(&'a self, graph_item: &'a GraphItem) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_xxl,
+            space_l,
+            space_xxs,
+            ..
+        } = theme::spacing();
+        let mut column = widget::column::with_capacity(1 + graph_item.disks.len())
+            .spacing(space_l)
+            .width(Length::Fill);
+
+        let all_used = graph_item.disks.iter().fold(0, |x, disk| x + disk.used);
+        let all_total = graph_item.disks.iter().fold(0, |x, disk| x + disk.total);
+        let all_io = graph_item.total_disk_io();
+        column = column.push(self.responsive_graph_top_processes(
+            ProcessCategory::DiskTotal,
+            move || {
+                let stats = stats_row(vec![
+                    stat(fl!("capacity"), format_bytes(all_total)),
+                    stat(fl!("in-use"), format_used(all_used, all_total)),
+                    stat(fl!("reading"), format_rate(all_io.0 as u64)),
+                    stat(fl!("writing"), format_rate(all_io.1 as u64)),
+                ]);
+                self.graph_section(fl!("all-disks"), stats, GraphKind::DiskTotal)
+            },
+        ));
+
+        for disk in graph_item.disks.iter() {
+            let mut stats = Vec::with_capacity(6);
+            stats.extend([
+                stat(fl!("mount-path"), disk.mount_path.clone()),
+                stat(fl!("capacity"), format_bytes(disk.total)),
+                stat(fl!("in-use"), format_used(disk.used, disk.total)),
+                stat(fl!("reading"), format_rate(disk.read as u64)),
+                stat(fl!("writing"), format_rate(disk.write as u64)),
+            ]);
+            if let Some(temp) = disk.temp {
+                stats.push(stat(fl!("temperature"), format!("{:.1}°C", temp)))
+            }
+            column = column.push(
+                widget::column!(
+                    widget::text::title4(&disk.name),
+                    stats_row(stats),
+                    widget::responsive(move |size| {
+                        let graphs = vec![
+                            self.titled_graph(fl!("reading"), GraphKind::DiskRead(&disk.name)),
+                            self.titled_graph(fl!("writing"), GraphKind::DiskWrite(&disk.name)),
+                        ];
+                        if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_GRAPH_WIDTH {
+                            Element::from(widget::row(graphs).spacing(space_xxl))
+                        } else {
+                            Element::from(widget::column(graphs).spacing(space_xxs))
+                        }
+                    })
+                )
+                .spacing(space_xxs),
+            );
+        }
+        column.into()
+    }
+
+    fn view_network<'a>(&'a self, graph_item: &'a GraphItem) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_l, space_xxs, ..
+        } = theme::spacing();
+        let mut column = widget::column::with_capacity(1 + graph_item.networks.len())
+            .spacing(space_l)
+            .width(Length::Fill);
+
+        let all_io = graph_item.total_network_io();
+        let stats = stats_row(vec![
+            stat(fl!("receiving"), format_rate(all_io.0 as u64)),
+            stat(fl!("sending"), format_rate(all_io.1 as u64)),
+        ]);
+        column =
+            column.push(self.graph_section(fl!("all-networks"), stats, GraphKind::NetworkTotal));
+
+        for net in graph_item.networks.iter() {
+            let stats = stats_row(vec![
+                stat(fl!("receiving"), format_rate(net.rx as u64)),
+                stat(fl!("sending"), format_rate(net.tx as u64)),
+            ]);
+            column = column.push(
+                widget::column!(
+                    widget::text::title4(&net.name),
+                    stats,
+                    widget::responsive(move |size| {
+                        let graphs = vec![
+                            self.titled_graph(fl!("receiving"), GraphKind::NetworkRx(&net.name)),
+                            self.titled_graph(fl!("sending"), GraphKind::NetworkTx(&net.name)),
+                        ];
+                        if size.width > 800.0 {
+                            Element::from(widget::row(graphs))
+                        } else {
+                            Element::from(widget::column(graphs))
+                        }
+                    })
+                )
+                .spacing(space_xxs),
+            );
+        }
+        column.into()
+    }
+
+    fn side_padding(&self) -> u16 {
+        if self.core.is_condensed() {
+            theme::spacing().space_s
+        } else {
+            theme::spacing().space_l
+        }
     }
 
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
-            space_xl,
             space_s,
             space_xs,
             space_xxs,
             space_xxxs,
             ..
-        } = theme::active().cosmic().spacing;
-
+        } = theme::spacing();
+        let padding = self.side_padding();
         let card = |graph_kind,
                     name,
                     caption,
@@ -661,30 +1026,26 @@ impl App {
                     .iter()
                     .min_by(|a, b| a.compare(b, sort_category))
                 {
-                    let mut row = widget::row::with_capacity(3)
+                    let row = widget::row::with_capacity(3)
                         .align_y(Alignment::Center)
-                        .spacing(space_xxs);
-                    if let Some(icon) = item.get_icon(ProcessCategory::App) {
-                        row = row.push(icon);
-                    }
-                    row = row
+                        .spacing(space_xxs)
+                        .push_maybe(item.get_icon(ProcessCategory::App))
                         .push(
-                            widget::container(
-                                widget::text(&item.name)
-                                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                                    .shaping(Shaping::Basic),
-                            )
-                            .align_x(Alignment::Start)
-                            .align_y(Alignment::Center)
-                            .width(Length::Fill),
+                            widget::text(&item.name)
+                                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                                .shaping(Shaping::Basic)
+                                .apply(widget::container)
+                                .align_x(Alignment::Start)
+                                .align_y(Alignment::Center)
+                                .width(Length::Fill),
                         )
                         .push(
-                            widget::container(
-                                widget::text(item.text(sort_category)).shaping(Shaping::Basic),
-                            )
-                            .align_x(Alignment::End)
-                            .align_y(Alignment::Center)
-                            .width(Length::Shrink),
+                            widget::text(item.text(sort_category))
+                                .shaping(Shaping::Basic)
+                                .apply(widget::container)
+                                .align_x(Alignment::End)
+                                .align_y(Alignment::Center)
+                                .width(Length::Shrink),
                         );
                     column = column
                         .push(widget::divider::horizontal::default())
@@ -711,31 +1072,24 @@ impl App {
                             .map(|x| (x.name.as_str(), (x.rx + x.tx) as u64))
                             .max_by(|a, b| a.1.cmp(&b.1))
                         {
-                            let mut row = widget::row::with_capacity(2).align_y(Alignment::Center);
-                            row = row
+                            let row = widget::row::with_capacity(2)
+                                .align_y(Alignment::Center)
                                 .push(
-                                    widget::container(
-                                        widget::text(name)
-                                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(
-                                                1,
-                                            )))
-                                            .shaping(Shaping::Basic),
-                                    )
-                                    .align_x(Alignment::Start)
-                                    .align_y(Alignment::Center)
-                                    .width(Length::Fill),
+                                    widget::text(name)
+                                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                                        .shaping(Shaping::Basic)
+                                        .apply(widget::container)
+                                        .align_x(Alignment::Start)
+                                        .align_y(Alignment::Center)
+                                        .width(Length::Fill),
                                 )
                                 .push(
-                                    widget::container(
-                                        widget::text(format!(
-                                            "{}/s",
-                                            humansize::format_size(io, humansize::DECIMAL)
-                                        ))
-                                        .shaping(Shaping::Basic),
-                                    )
-                                    .align_x(Alignment::End)
-                                    .align_y(Alignment::Center)
-                                    .width(Length::Shrink),
+                                    widget::text(format_rate(io))
+                                        .shaping(Shaping::Basic)
+                                        .apply(widget::container)
+                                        .align_x(Alignment::End)
+                                        .align_y(Alignment::Center)
+                                        .width(Length::Shrink),
                                 );
                             column = column
                                 .push(widget::divider::horizontal::default())
@@ -753,19 +1107,23 @@ impl App {
                     .on_press(message),
             );
 
-            widget::container(
-                widget::row!(
-                    canvas(Graph::new(graph_kind, &self.graph_history).border())
-                        .height(SMALL_GRAPH_HEIGHT)
-                        .width(Length::Fill),
-                    column.width(Length::Fill)
-                )
-                .spacing(space_xs),
+            widget::row!(
+                canvas(Graph::new(graph_kind, &self.graph_history).border())
+                    .height(SMALL_GRAPH_HEIGHT)
+                    .width(Length::Fill),
+                column.width(Length::Fill)
             )
+            .spacing(space_xs)
+            .apply(widget::container)
             .class(theme::Container::Card)
             .padding(space_s)
             .width(Length::Fill)
             .into()
+        };
+        let card_lines = |first: String, second: String| {
+            widget::column!(widget::text::body(first), widget::text::body(second))
+                .spacing(space_xxxs)
+                .into()
         };
 
         let mut items = Vec::with_capacity(4 + graph_item.gpus.len() * 2);
@@ -777,35 +1135,30 @@ impl App {
                 .first()
                 .map(|x| x.brand.clone())
                 .unwrap_or_default(),
-            {
-                let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
-                {
-                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
-                    row = row.push(self.tag(
+            widget::column!(
+                widget::row!(
+                    self.tag(
                         widget::text::body(format!("{:.1}%", graph_item.total_cpu_usage())),
                         Message::CpuGraph(ProcGraphKind::Utilization),
                         false,
-                    ));
-                    row = row.push(self.tag(
+                    ),
+                    self.tag(
                         widget::text::body(format_frequency(graph_item.max_cpu_frequency())),
                         Message::CpuGraph(ProcGraphKind::Frequency),
                         false,
-                    ));
-                    column = column.push(row);
-                }
-                {
-                    let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
-                    if let Some(temp) = graph_item.max_cpu_temp() {
-                        row = row.push(self.tag(
-                            widget::text::body(format!("{:.1}°C", temp)),
-                            Message::CpuGraph(ProcGraphKind::Temperature),
-                            false,
-                        ));
-                    }
-                    column = column.push(row);
-                }
-                column.into()
-            },
+                    )
+                )
+                .spacing(space_xxxs),
+                widget::row::with_capacity(1).push_maybe(graph_item.max_cpu_temp().map(|temp| {
+                    self.tag(
+                        widget::text::body(format!("{:.1}°C", temp)),
+                        Message::CpuGraph(ProcGraphKind::Temperature),
+                        false,
+                    )
+                }))
+            )
+            .spacing(space_xxxs)
+            .into(),
             Some(ProcessCategory::CPU),
             Message::NavPage(NavPage::Cpu),
         ));
@@ -813,22 +1166,11 @@ impl App {
         items.push(card(
             GraphKind::Memory,
             fl!("memory"),
-            format!(
-                "{}",
-                humansize::format_size(graph_item.memory.total, humansize::BINARY),
+            format_bytes(graph_item.memory.total),
+            card_lines(
+                format_percent(graph_item.memory.used, graph_item.memory.total),
+                format_bytes(graph_item.memory.used),
             ),
-            widget::column!(
-                widget::text::body(format!(
-                    "{:.1}%",
-                    100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
-                )),
-                widget::text::body(format!(
-                    "{}",
-                    humansize::format_size(graph_item.memory.used, humansize::BINARY),
-                ))
-            )
-            .spacing(space_xxxs)
-            .into(),
             Some(ProcessCategory::Memory),
             Message::NavPage(NavPage::Memory),
         ));
@@ -838,20 +1180,10 @@ impl App {
             GraphKind::DiskTotal,
             fl!("disk"),
             String::new(),
-            widget::column!(
-                widget::text::body(format!(
-                    "{}/s {}",
-                    humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
-                    fl!("read"),
-                )),
-                widget::text::body(format!(
-                    "{}/s {}",
-                    humansize::format_size((disk_io.1) as u64, humansize::DECIMAL),
-                    fl!("write"),
-                ))
-            )
-            .spacing(space_xxxs)
-            .into(),
+            card_lines(
+                format!("{} {}", format_rate(disk_io.0 as u64), fl!("read")),
+                format!("{} {}", format_rate(disk_io.1 as u64), fl!("write")),
+            ),
             Some(ProcessCategory::DiskTotal),
             Message::NavPage(NavPage::Disk),
         ));
@@ -861,18 +1193,10 @@ impl App {
             GraphKind::NetworkTotal,
             fl!("network"),
             String::new(),
-            widget::column!(
-                widget::text::body(format!(
-                    "{}/s rx",
-                    humansize::format_size(network_io.0 as u64, humansize::DECIMAL),
-                )),
-                widget::text::body(format!(
-                    "{}/s tx",
-                    humansize::format_size((network_io.1) as u64, humansize::DECIMAL),
-                ))
-            )
-            .spacing(space_xxxs)
-            .into(),
+            card_lines(
+                format!("{} rx", format_rate(network_io.0 as u64)),
+                format!("{} tx", format_rate(network_io.1 as u64)),
+            ),
             None,
             Message::NavPage(NavPage::Network),
         ));
@@ -880,47 +1204,43 @@ impl App {
         for (gpu_i, gpu) in graph_item.gpus.iter().enumerate() {
             if let Some(usage) = gpu.usage {
                 let (data, process_category) = match gpu.state {
-                    GpuState::Active | GpuState::Idle(_) => {
-                        let mut column = widget::column::with_capacity(2).spacing(space_xxxs);
-                        {
-                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
-                            row = row.push(self.tag(
-                                widget::text::body(format!("{:.1}%", usage)),
-                                Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
-                                false,
-                            ));
-                            if let Some(frequency) = gpu.frequency {
-                                row = row.push(self.tag(
-                                    widget::text::body(format_frequency(frequency)),
-                                    Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                    GpuState::Active | GpuState::Idle(_) => (
+                        widget::column!(
+                            widget::row::with_capacity(2)
+                                .spacing(space_xxxs)
+                                .push(self.tag(
+                                    widget::text::body(format!("{:.1}%", usage)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
                                     false,
-                                ));
-                            }
-                            column = column.push(row);
-                        }
-                        {
-                            let mut row = widget::row::with_capacity(2).spacing(space_xxxs);
-                            if let Some(power) = gpu.power {
-                                row = row.push(self.tag(
-                                    widget::text::body(format!("{:.1} W", power)),
-                                    Message::GpuGraph(gpu.id, ProcGraphKind::Power),
-                                    false,
-                                ));
-                            }
-                            if let Some(temp) = gpu.temp {
-                                row = row.push(self.tag(
-                                    widget::text::body(format!("{:.1}°C", temp)),
-                                    Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
-                                    false,
-                                ));
-                            }
-                            column = column.push(row);
-                        }
-                        (
-                            column.into(),
-                            Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
+                                ))
+                                .push_maybe(gpu.frequency.map(|frequency| {
+                                    self.tag(
+                                        widget::text::body(format_frequency(frequency)),
+                                        Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
+                                        false,
+                                    )
+                                })),
+                            widget::row::with_capacity(2)
+                                .spacing(space_xxxs)
+                                .push_maybe(gpu.power.map(|power| {
+                                    self.tag(
+                                        widget::text::body(format!("{:.1} W", power)),
+                                        Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                        false,
+                                    )
+                                }))
+                                .push_maybe(gpu.temp.map(|temp| {
+                                    self.tag(
+                                        widget::text::body(format!("{:.1}°C", temp)),
+                                        Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
+                                        false,
+                                    )
+                                }))
                         )
-                    }
+                        .spacing(space_xxxs)
+                        .into(),
+                        Some(ProcessCategory::GpuUsage(gpu.id, Some(gpu_i))),
+                    ),
                     GpuState::Suspended => {
                         (widget::text::body(fl!("gpu-suspended-title")).into(), None)
                     }
@@ -937,44 +1257,33 @@ impl App {
                     Message::GpuSelect(gpu_i),
                 ));
             }
-            if let Some(vram_used) = gpu.vram_used {
-                if let Some(vram_total) = gpu.vram_total {
-                    let (data, process_category) = match gpu.state {
-                        GpuState::Active | GpuState::Idle(_) => (
-                            widget::column!(
-                                widget::text::body(format!(
-                                    "{:.1}%",
-                                    100.0 * (vram_used as f32) / (vram_total as f32),
-                                ),),
-                                widget::text::body(format!(
-                                    "{} / {}",
-                                    humansize::format_size(vram_used, humansize::BINARY),
-                                    humansize::format_size(vram_total, humansize::BINARY),
-                                ),),
-                            )
-                            .spacing(space_xxxs)
-                            .into(),
-                            Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
+            if let (Some(vram_used), Some(vram_total)) = (gpu.vram_used, gpu.vram_total) {
+                let (data, process_category) = match gpu.state {
+                    GpuState::Active | GpuState::Idle(_) => (
+                        card_lines(
+                            format_percent(vram_used, vram_total),
+                            format!("{} / {}", format_bytes(vram_used), format_bytes(vram_total)),
                         ),
-                        GpuState::Suspended => {
-                            (widget::text::body(fl!("gpu-suspended-title")).into(), None)
-                        }
-                    };
-                    items.push(card(
-                        GraphKind::GpuVram(gpu.id),
-                        fl!("gpu-vram-index", index = gpu_i),
-                        gpu.name.clone(),
-                        data,
-                        process_category,
-                        Message::GpuSelect(gpu_i),
-                    ));
-                }
+                        Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
+                    ),
+                    GpuState::Suspended => {
+                        (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                    }
+                };
+                items.push(card(
+                    GraphKind::GpuVram(gpu.id),
+                    fl!("gpu-vram-index", index = gpu_i),
+                    gpu.name.clone(),
+                    data,
+                    process_category,
+                    Message::GpuSelect(gpu_i),
+                ));
             }
         }
 
         let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
         let min_width = 440.0;
-        let content_width = size.width - (space_xl * 2) as f32;
+        let content_width = size.width - (padding * 2) as f32;
         enum DashboardLayout {
             Small,
             Medium,
@@ -1067,16 +1376,13 @@ impl App {
         }
         for &(show_apps, list_count) in &[(true, app_count), (false, proc_count)] {
             list_cards.push(Element::from(
-                widget::container(
-                    widget::column!(self.top_processes_by(
-                        show_apps,
-                        self.process_sort.0,
-                        self.process_sort.1,
-                        true,
-                        list_count as usize,
-                    ))
-                    .spacing(space_s),
-                )
+                widget::container(self.top_processes_by(
+                    show_apps,
+                    self.process_sort.0,
+                    self.process_sort.1,
+                    true,
+                    list_count as usize,
+                ))
                 .class(theme::Container::Card)
                 .padding(space_s)
                 .width(Length::Fill),
@@ -1117,17 +1423,15 @@ impl App {
             }
         };
 
-        widget::mouse_area(
-            widget::scrollable(
-                widget::container(content)
-                    .padding([0, space_xl, space_s, space_xl])
-                    .width(Length::Fill),
-            )
+        widget::container(content)
+            .padding([0, padding, space_s, padding])
             .width(Length::Fill)
-            .height(Length::Fill),
-        )
-        .on_press(Message::Select(None))
-        .into()
+            .apply(widget::scrollable)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .apply(widget::mouse_area)
+            .on_press(Message::Select(None))
+            .into()
     }
 }
 
@@ -1242,7 +1546,10 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
@@ -1576,7 +1883,7 @@ impl Application for App {
     }
 
     fn footer(&self) -> Option<Element<'_, Self::Message>> {
-        let cosmic_theme::Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+        let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
 
         //TODO: support app selection
         let (item, force_quit, quit) = match self.selected.as_ref()? {
@@ -1628,30 +1935,26 @@ impl Application for App {
                 )
             }
         };
-        let mut row = widget::row::with_capacity(5)
+        let row = widget::row::with_capacity(5)
             .align_y(Alignment::Center)
-            .spacing(space_xxs);
-        if let Some(icon) = item.get_icon(ProcessCategory::App) {
-            row = row.push(icon);
-        }
-        row = row
+            .spacing(space_xxs)
+            .push_maybe(item.get_icon(ProcessCategory::App))
             .push(
-                widget::container(
-                    widget::text(&item.name)
-                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                        .shaping(Shaping::Basic),
-                )
-                .align_x(Alignment::Start)
-                .align_y(Alignment::Center)
-                .width(Length::Fill),
+                widget::text(&item.name)
+                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                    .shaping(Shaping::Basic)
+                    .apply(widget::container)
+                    .align_x(Alignment::Start)
+                    .align_y(Alignment::Center)
+                    .width(Length::Fill),
             )
             .push(
-                widget::container(
-                    widget::text(item.text(ProcessCategory::PID)).shaping(Shaping::Basic),
-                )
-                .align_x(Alignment::End)
-                .align_y(Alignment::Center)
-                .width(Length::Shrink),
+                widget::text(item.text(ProcessCategory::PID))
+                    .shaping(Shaping::Basic)
+                    .apply(widget::container)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Center)
+                    .width(Length::Shrink),
             )
             .push(
                 widget::button::destructive(fl!("force-quit"))
@@ -1673,21 +1976,17 @@ impl Application for App {
     /// Creates a view after each update.
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
-            space_xxl,
-            space_xl,
-            space_l,
             space_m,
             space_s,
-            space_xs,
             space_xxs,
             ..
-        } = theme::active().cosmic().spacing;
-
+        } = theme::spacing();
+        let padding = self.side_padding();
         let nav_page = self
             .nav_model
             .active_data::<NavPage>()
             .map_or(NavPage::Dashboard, |x| *x);
-        let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
+        let mut page_header = widget::column::with_capacity(6).padding([0, padding]);
         page_header = page_header
             .push(
                 widget::button::text(fl!("dashboard"))
@@ -1727,14 +2026,12 @@ impl Application for App {
                 };
                 page_header = page_header
                     .push(
-                        widget::container(
-                            widget::search_input(fl!("search-processes"), search_value)
-                                .on_clear(clear_message)
-                                .on_input(input_message)
-                                .width(360.0),
-                        )
-                        .align_x(Alignment::Center)
-                        .width(Length::Fill),
+                        widget::search_input(fl!("search-processes"), search_value)
+                            .on_clear(clear_message)
+                            .on_input(input_message)
+                            .width(360.0)
+                            .apply(widget::container)
+                            .center_x(Length::Fill),
                     )
                     .push(widget::space().height(space_m));
 
@@ -1760,26 +2057,21 @@ impl Application for App {
                     let header =
                         table_header(&categories, self.process_sort.0, self.process_sort.1, true);
                     widget::column!(
-                        iced::widget::scrollable(
-                            header.padding([0, space_xl, 0, space_xl]).width(width),
-                        )
-                        .direction(Direction::Horizontal(Scrollbar::hidden()))
-                        .id(self.scroll_header_id.clone())
-                        .on_scroll(Message::ScrollHeader)
-                        .width(Length::Fill),
-                        widget::scrollable(
-                            widget::container(iced::widget::List::new(
-                                &self.process_content,
-                                move |_i, item| {
-                                    widget::column::with_capacity(2)
-                                        .push(widget::divider::horizontal::default())
-                                        .push(table_row(item, &categories, &self.selected))
-                                        .into()
-                                },
-                            ))
-                            .padding([0, space_xl, 0, space_xl])
-                            .width(width),
-                        )
+                        iced::widget::scrollable(header.padding([0, padding]).width(width))
+                            .direction(Direction::Horizontal(Scrollbar::hidden()))
+                            .id(self.scroll_header_id.clone())
+                            .on_scroll(Message::ScrollHeader)
+                            .width(Length::Fill),
+                        iced::widget::List::new(&self.process_content, move |_i, item| {
+                            widget::column::with_capacity(2)
+                                .push(widget::divider::horizontal::default())
+                                .push(table_row(item, &categories, &self.selected))
+                                .into()
+                        },)
+                        .apply(widget::container)
+                        .padding([0, padding])
+                        .width(width)
+                        .apply(widget::scrollable)
                         .direction(direction)
                         .id(self.scroll_table_id.clone())
                         .on_scroll(Message::ScrollTable)
@@ -1789,210 +2081,19 @@ impl Application for App {
                 });
 
                 // Custom view for horizontal scrolling
-                let content = widget::mouse_area(
-                    widget::column!(page_header, responsive,)
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                )
-                .on_press(Message::Select(None));
+                let content = widget::column!(page_header, responsive)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .apply(widget::mouse_area)
+                    .on_press(Message::Select(None));
                 return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
                     widget::id_container(content, id.clone()).into()
                 } else {
                     content.into()
                 };
             }
-            (NavPage::Cpu, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(2)
-                    .spacing(space_l)
-                    .width(Length::Fill);
-
-                // Overall utilization and top processes
-                column = column.push(self.responsive_graph_top_processes(
-                    ProcessCategory::CPU,
-                    move || {
-                        let mut row = widget::row::with_capacity(3)
-                            .spacing(space_xxs)
-                            .push(self.tag(
-                                widget::column!(
-                                    widget::text::body(fl!("utilization")),
-                                    widget::text::heading(format!(
-                                        "{:.1}%",
-                                        graph_item.total_cpu_usage()
-                                    ))
-                                ),
-                                Message::CpuGraph(ProcGraphKind::Utilization),
-                                true,
-                            ))
-                            .push(self.tag(
-                                widget::column!(
-                                    widget::text::body(fl!("speed")),
-                                    widget::text::heading(format_frequency(
-                                        graph_item.max_cpu_frequency()
-                                    ))
-                                ),
-                                Message::CpuGraph(ProcGraphKind::Frequency),
-                                true,
-                            ));
-                        //TODO: CPU power
-                        if let Some(temp) = graph_item.max_cpu_temp() {
-                            row = row.push(self.tag(
-                                widget::column!(
-                                    widget::text::body(fl!("temperature")),
-                                    widget::text::heading(format!("{:.1}°C", temp))
-                                ),
-                                Message::CpuGraph(ProcGraphKind::Temperature),
-                                true,
-                            ));
-                        }
-                        widget::column!(
-                            widget::text::title4(fl!("overall-utilization")),
-                            row,
-                            canvas(
-                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
-                                    .legend()
-                            )
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
-                        )
-                        .spacing(space_xxs)
-                        .into()
-                    },
-                ));
-
-                // Utilization per core
-                let mut children = Vec::with_capacity(graph_item.cpus.len());
-                for cpu in graph_item.cpus.iter() {
-                    children.push(
-                        widget::column!(
-                            widget::row!(
-                                widget::text::heading(&cpu.name),
-                                widget::space().width(Length::Fill),
-                                widget::text::body(format_frequency(cpu.frequency))
-                                    .align_x(Alignment::End),
-                            )
-                            .width(200.0 + 48.0),
-                            widget::row!(
-                                widget::determinate_linear(cpu.usage / 100.0)
-                                    .girth(12.0)
-                                    .width(200.0),
-                                widget::text(format!("{:.1}%", cpu.usage))
-                                    .align_x(Alignment::End)
-                                    .width(48.0),
-                            )
-                            .align_y(Alignment::Center)
-                        )
-                        .into(),
-                    );
-                }
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("utilization-per-core")),
-                        widget::flex_row(children)
-                            .column_spacing(space_m)
-                            .row_spacing(space_xs)
-                    )
-                    .spacing(space_xxs),
-                );
-
-                column.into()
-            }
-            (NavPage::Memory, Some(graph_item)) => {
-                let mem = &graph_item.memory;
-
-                let mut column = widget::column::with_capacity(2)
-                    .spacing(space_l)
-                    .width(Length::Fill);
-
-                // Memory information and top processes
-                column = column.push(self.responsive_graph_top_processes(
-                    ProcessCategory::Memory,
-                    move || {
-                        widget::column!(
-                            widget::text::title4(fl!("memory-usage")),
-                            widget::row!(
-                                widget::column!(
-                                    widget::text::body(fl!("capacity")),
-                                    widget::text::heading(
-                                        humansize::format_size(mem.total, humansize::BINARY)
-                                            .to_string()
-                                    )
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("in-use")),
-                                    widget::text::heading(format!(
-                                        "{} ({:.1}%)",
-                                        humansize::format_size(mem.used, humansize::BINARY),
-                                        100.0 * (mem.used as f64) / (mem.total as f64)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("cache")),
-                                    widget::text::heading(format!(
-                                        "{} ({:.1}%)",
-                                        humansize::format_size(mem.cache, humansize::BINARY),
-                                        100.0 * (mem.cache as f64) / (mem.total as f64)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("total-utilization")),
-                                    widget::text::heading({
-                                        let total_used = mem.used + mem.cache;
-                                        format!(
-                                            "{} ({:.1}%)",
-                                            humansize::format_size(total_used, humansize::BINARY),
-                                            100.0 * (total_used as f64) / (mem.total as f64)
-                                        )
-                                    })
-                                ),
-                            )
-                            .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
-                        )
-                        .spacing(space_xxs)
-                        .into()
-                    },
-                ));
-
-                // Swap information (responsive, but no top processes)
-                column = column.push(widget::responsive(move |size| {
-                    let graph = widget::column!(
-                        widget::text::title4(fl!("swap-usage")),
-                        widget::row!(
-                            widget::column!(
-                                widget::text::body(fl!("capacity")),
-                                widget::text::heading(
-                                    humansize::format_size(mem.swap_total, humansize::BINARY)
-                                        .to_string()
-                                )
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("in-use")),
-                                widget::text::heading(format!(
-                                    "{} ({:.1}%)",
-                                    humansize::format_size(mem.swap_used, humansize::BINARY),
-                                    100.0 * (mem.swap_used as f64) / (mem.swap_total as f64)
-                                ))
-                            ),
-                        )
-                        .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Swap, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
-                    )
-                    .spacing(space_xxs);
-                    if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
-                        widget::row!(graph, widget::space().width(MIN_PROCESSES_WIDTH))
-                            .spacing(space_xxl)
-                            .into()
-                    } else {
-                        graph.into()
-                    }
-                }));
-
-                column.into()
-            }
+            (NavPage::Cpu, Some(graph_item)) => self.view_cpu(graph_item),
+            (NavPage::Memory, Some(graph_item)) => self.view_memory(graph_item),
             (NavPage::Gpu, Some(graph_item)) => {
                 if let Some((gpu_i, gpu)) = graph_item
                     .gpus
@@ -2008,379 +2109,19 @@ impl Application for App {
                         .push(
                             widget::column!(
                                 widget::divider::horizontal::default(),
-                                widget::dropdown(&self.gpu_names, Some(gpu_i), Message::GpuSelect,),
+                                widget::dropdown(&self.gpu_names, Some(gpu_i), Message::GpuSelect),
                                 widget::divider::horizontal::default(),
                             )
                             .spacing(space_xxs),
                         )
                         .push(widget::space().height(space_m));
-                    let mut column = widget::column::with_capacity(2).spacing(space_l);
-                    match gpu.state {
-                        GpuState::Active | GpuState::Idle(_) => {
-                            if let Some(usage) = gpu.usage {
-                                // GPU utilization and top processes
-                                column = column.push(self.responsive_graph_top_processes(
-                                    ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
-                                    move || {
-                                        let mut row =
-                                            widget::row::with_capacity(4).spacing(space_xxs);
-                                        row = row.push(self.tag(
-                                            widget::column!(
-                                                widget::text::body(fl!("utilization")),
-                                                widget::text::heading(format!("{:.1}%", usage))
-                                            ),
-                                            Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
-                                            true,
-                                        ));
-                                        if let Some(frequency) = gpu.frequency {
-                                            row = row.push(self.tag(
-                                                widget::column!(
-                                                    widget::text::body(fl!("speed")),
-                                                    widget::text::heading(format_frequency(
-                                                        frequency
-                                                    ))
-                                                ),
-                                                Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
-                                                true,
-                                            ));
-                                        }
-                                        if let Some(power) = gpu.power {
-                                            row = row.push(self.tag(
-                                                widget::column!(
-                                                    widget::text::body(fl!("power")),
-                                                    widget::text::heading(format!(
-                                                        "{:.1} W",
-                                                        power
-                                                    ))
-                                                ),
-                                                Message::GpuGraph(gpu.id, ProcGraphKind::Power),
-                                                true,
-                                            ));
-                                        }
-                                        if let Some(temp) = gpu.temp {
-                                            row = row.push(self.tag(
-                                                widget::column!(
-                                                    widget::text::body(fl!("temperature")),
-                                                    widget::text::heading(format!("{:.1}°C", temp))
-                                                ),
-                                                Message::GpuGraph(
-                                                    gpu.id,
-                                                    ProcGraphKind::Temperature,
-                                                ),
-                                                true,
-                                            ));
-                                        }
-                                        widget::column!(
-                                            widget::text::title4(fl!("gpu-utilization")),
-                                            row,
-                                            canvas(
-                                                Graph::new(
-                                                    GraphKind::Gpu(
-                                                        gpu.id,
-                                                        self.gpu_graphs
-                                                            .get(&gpu.id)
-                                                            .copied()
-                                                            .unwrap_or_default()
-                                                    ),
-                                                    &self.graph_history
-                                                )
-                                                .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill),
-                                        )
-                                        .spacing(space_xxs)
-                                        .into()
-                                    },
-                                ));
-                            }
-                            if let Some(vram_used) = gpu.vram_used {
-                                if let Some(vram_total) = gpu.vram_total {
-                                    // GPU VRAM and top processes
-                                    column = column.push(self.responsive_graph_top_processes(
-                                        ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
-                                        move || {
-                                            widget::column!(
-                                                widget::text::title4(fl!("gpu-vram")),
-                                                widget::row!(
-                                                    widget::column!(
-                                                        widget::text::body(fl!("capacity")),
-                                                        widget::text::heading(
-                                                            humansize::format_size(
-                                                                vram_total,
-                                                                humansize::BINARY
-                                                            )
-                                                            .to_string()
-                                                        )
-                                                    ),
-                                                    widget::column!(
-                                                        widget::text::body(fl!("vram")),
-                                                        widget::text::heading(format!(
-                                                            "{} ({:.1}%)",
-                                                            humansize::format_size(
-                                                                vram_used,
-                                                                humansize::BINARY
-                                                            ),
-                                                            100.0 * (vram_used as f64)
-                                                                / (vram_total as f64)
-                                                        ))
-                                                    ),
-                                                )
-                                                .spacing(space_m),
-                                                canvas(
-                                                    Graph::new(
-                                                        GraphKind::GpuVram(gpu.id),
-                                                        &self.graph_history
-                                                    )
-                                                    .legend(),
-                                                )
-                                                .height(LARGE_GRAPH_HEIGHT)
-                                                .width(Length::Fill),
-                                            )
-                                            .spacing(space_xxs)
-                                            .into()
-                                        },
-                                    ));
-                                }
-                            }
-                        }
-                        GpuState::Suspended => {
-                            column = column.push(widget::column!(
-                                widget::text::title4(fl!("gpu-suspended-title")),
-                                widget::text::body(fl!("gpu-suspended-description"))
-                            ));
-                        }
-                    }
-                    column.into()
+                    self.view_gpu(gpu, gpu_i)
                 } else {
                     widget::text::body(fl!("no-gpus")).into()
                 }
             }
-            (NavPage::Disk, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(1 + graph_item.disks.len())
-                    .spacing(space_l)
-                    .width(Length::Fill);
-
-                let all_used = graph_item.disks.iter().fold(0, |x, disk| x + disk.used);
-                let all_total = graph_item.disks.iter().fold(0, |x, disk| x + disk.total);
-                let all_io = graph_item.total_disk_io();
-                column = column.push(self.responsive_graph_top_processes(
-                    ProcessCategory::DiskTotal,
-                    move || {
-                        widget::column!(
-                            widget::text::title4(fl!("all-disks")),
-                            widget::row!(
-                                widget::column!(
-                                    widget::text::body(fl!("capacity")),
-                                    widget::text::heading(
-                                        humansize::format_size(all_total, humansize::BINARY)
-                                            .to_string()
-                                    )
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("in-use")),
-                                    widget::text::heading(format!(
-                                        "{} ({:.1}%)",
-                                        humansize::format_size(all_used, humansize::BINARY),
-                                        100.0 * (all_used as f64) / (all_total as f64)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("reading")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("writing")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
-                                    ))
-                                ),
-                            )
-                            .spacing(space_m),
-                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
-                        )
-                        .spacing(space_xxs)
-                        .into()
-                    },
-                ));
-
-                for disk in graph_item.disks.iter() {
-                    column = column.push(
-                        widget::column!(
-                            widget::text::title4(&disk.name),
-                            widget::row!(
-                                widget::column!(
-                                    widget::text::body(fl!("mount-path")),
-                                    widget::text::heading(&disk.mount_path)
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("capacity")),
-                                    widget::text::heading(
-                                        humansize::format_size(disk.total, humansize::BINARY)
-                                            .to_string()
-                                    )
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("in-use")),
-                                    widget::text::heading(format!(
-                                        "{} ({:.1}%)",
-                                        humansize::format_size(disk.used, humansize::BINARY),
-                                        100.0 * (disk.used as f64) / (disk.total as f64)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("reading")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(
-                                            disk.read as u64,
-                                            humansize::DECIMAL
-                                        )
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("writing")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(
-                                            disk.write as u64,
-                                            humansize::DECIMAL
-                                        )
-                                    ))
-                                ),
-                                if let Some(temp) = disk.temp {
-                                    widget::column!(
-                                        widget::text::body(fl!("temperature")),
-                                        widget::text::heading(format!("{:.1}°C", temp))
-                                    )
-                                } else {
-                                    widget::column!()
-                                }
-                            )
-                            .spacing(space_m),
-                            widget::responsive(move |size| {
-                                let mut graphs = Vec::with_capacity(2);
-                                for (title, graph_kind) in [
-                                    (fl!("reading"), GraphKind::DiskRead(&disk.name)),
-                                    (fl!("writing"), GraphKind::DiskWrite(&disk.name)),
-                                ] {
-                                    graphs.push(Element::from(
-                                        widget::column!(
-                                            widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
-                                        )
-                                        .spacing(space_xxs),
-                                    ));
-                                }
-                                if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_GRAPH_WIDTH
-                                {
-                                    Element::from(widget::row(graphs).spacing(space_xxl))
-                                } else {
-                                    Element::from(widget::column(graphs).spacing(space_xxs))
-                                }
-                            })
-                        )
-                        .spacing(space_xxs),
-                    );
-                }
-                column.into()
-            }
-            (NavPage::Network, Some(graph_item)) => {
-                let mut column = widget::column::with_capacity(1 + graph_item.networks.len())
-                    .spacing(space_l)
-                    .width(Length::Fill);
-
-                let all_io = graph_item.total_network_io();
-                column = column.push(
-                    widget::column!(
-                        widget::text::title4(fl!("all-networks")),
-                        widget::row!(
-                            widget::column!(
-                                widget::text::body(fl!("receiving")),
-                                widget::text::heading(format!(
-                                    "{}/s",
-                                    humansize::format_size(all_io.0 as u64, humansize::DECIMAL)
-                                ))
-                            ),
-                            widget::column!(
-                                widget::text::body(fl!("sending")),
-                                widget::text::heading(format!(
-                                    "{}/s",
-                                    humansize::format_size(all_io.1 as u64, humansize::DECIMAL)
-                                ))
-                            ),
-                        )
-                        .spacing(space_m),
-                        canvas(Graph::new(GraphKind::NetworkTotal, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
-                    )
-                    .spacing(space_xxs),
-                );
-
-                for net in graph_item.networks.iter() {
-                    column = column.push(
-                        widget::column!(
-                            widget::text::title4(&net.name),
-                            widget::row!(
-                                widget::column!(
-                                    widget::text::body(fl!("receiving")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(net.rx as u64, humansize::DECIMAL)
-                                    ))
-                                ),
-                                widget::column!(
-                                    widget::text::body(fl!("sending")),
-                                    widget::text::heading(format!(
-                                        "{}/s",
-                                        humansize::format_size(net.tx as u64, humansize::DECIMAL)
-                                    ))
-                                ),
-                            )
-                            .spacing(space_m),
-                            widget::responsive(move |size| {
-                                let mut graphs = Vec::with_capacity(2);
-                                for (title, graph_kind) in [
-                                    (fl!("receiving"), GraphKind::NetworkRx(&net.name)),
-                                    (fl!("sending"), GraphKind::NetworkTx(&net.name)),
-                                ] {
-                                    graphs.push(Element::from(
-                                        widget::column!(
-                                            widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
-                                        )
-                                        .spacing(space_xxs),
-                                    ));
-                                }
-                                if size.width > 800.0 {
-                                    Element::from(widget::row(graphs))
-                                } else {
-                                    Element::from(widget::column(graphs))
-                                }
-                            })
-                        )
-                        .spacing(space_xxs),
-                    );
-                }
-                column.into()
-            }
+            (NavPage::Disk, Some(graph_item)) => self.view_disk(graph_item),
+            (NavPage::Network, Some(graph_item)) => self.view_network(graph_item),
             // The animated loading indicator can lag the UI when not using WGPU
             #[cfg(feature = "wgpu")]
             _ => widget::indeterminate_circular().into(),
@@ -2390,12 +2131,11 @@ impl Application for App {
         let content = widget::mouse_area(
             widget::column!(
                 page_header,
-                widget::scrollable(
-                    widget::container(content)
-                        .padding([0, space_xl, space_s, space_xl])
-                        .width(Length::Fill)
-                )
-                .width(Length::Fill),
+                widget::container(content)
+                    .padding([0, padding, space_s, padding])
+                    .width(Length::Fill)
+                    .apply(widget::scrollable)
+                    .width(Length::Fill),
             )
             .width(Length::Fill)
             .height(Length::Fill),

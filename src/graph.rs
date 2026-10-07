@@ -157,9 +157,11 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         let max_x = calc_x(0.0);
         let min_y = calc_y(scale_y);
         let max_y = calc_y(0.0);
-
+        // spacing between vertical legend and graph
+        let spacing = 4.0;
+        let size = bounds.size() + Size::new(spacing, 0.0);
         //TODO: use cache
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let mut frame = canvas::Frame::new(renderer, size);
 
         let text = |string: &str,
                     position: Point,
@@ -233,7 +235,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         // Draw Y axis info
         text(
             &self.kind.label(0.0),
-            Point::new(max_x, calc_y(0.0)),
+            Point::new(max_x + spacing, calc_y(0.0)),
             Alignment::Left,
             Vertical::Bottom,
             &mut frame,
@@ -248,7 +250,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
 
             text(
                 &self.kind.label(value),
-                Point::new(max_x, y),
+                Point::new(max_x + spacing, y),
                 Alignment::Left,
                 Vertical::Center,
                 &mut frame,
@@ -256,7 +258,7 @@ impl<'a> canvas::Program<Message, Theme, Renderer> for Graph<'a> {
         }
         text(
             &self.kind.label(scale_y),
-            Point::new(max_x, calc_y(scale_y)),
+            Point::new(max_x + spacing, calc_y(scale_y)),
             Alignment::Left,
             Vertical::Top,
             &mut frame,
