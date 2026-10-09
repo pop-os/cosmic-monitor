@@ -48,7 +48,7 @@ xdgen = "0.1"
 default = ["dbus-config", "nvml", "wayland", "wgpu"]
 dbus-config = ["libcosmic/dbus-config"]
 nvml = ["dep:nvml-wrapper"]
-wgpu = ["libcosmic/wgpu"]
+wgpu = ["libcosmic/iced_wgpu"]
 wayland = ["libcosmic/wayland"]
 
 [profile.release-with-debug]
