@@ -374,6 +374,7 @@ pub struct App {
     process_content: iced::widget::list::Content<ProcessItem>,
     app_search: (String, Option<Regex>),
     process_search: (String, Option<Regex>),
+    search_id: widget::Id,
     process_sort: (ProcessCategory, bool),
     scroll_header_id: widget::Id,
     scroll_table_id: widget::Id,
@@ -1213,6 +1214,7 @@ impl Application for App {
             process_content: iced::widget::list::Content::new(),
             app_search: (String::new(), None),
             process_search: (String::new(), None),
+            search_id: widget::Id::unique(),
             process_sort: (ProcessCategory::default(), false),
             scroll_header_id: widget::Id::unique(),
             scroll_table_id: widget::Id::unique(),
@@ -1231,7 +1233,6 @@ impl Application for App {
         Some(&self.nav_model)
     }
 
-    //TODO: currently the first escape unfocuses, and the second calls this function
     fn on_escape(&mut self) -> Task<Message> {
         if self.dialog_opt.take().is_some() {
             return Task::none();
@@ -1242,12 +1243,21 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
         } else if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
             return self.update(Message::ProcessSearch(String::new()));
+        }
+        if !matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Dashboard)
+        ) {
+            return self.update(Message::NavPage(NavPage::Dashboard));
         }
         Task::none()
     }
@@ -1256,6 +1266,11 @@ impl Application for App {
         self.nav_model.activate(id);
         self.selected = None;
         self.update_snapshot();
+        if (self.nav_model.active_data() == Some(&NavPage::Applications))
+            | (self.nav_model.active_data() == Some(&NavPage::Processes))
+        {
+            return widget::text_input::focus(self.search_id.clone());
+        }
         Task::none()
     }
 
@@ -1373,6 +1388,9 @@ impl Application for App {
                     self.nav_model.activate(id);
                     self.selected = None;
                     self.update_snapshot();
+                }
+                if (nav_page == NavPage::Applications) | (nav_page == NavPage::Processes) {
+                    return widget::text_input::focus(self.search_id.clone());
                 }
             }
             Message::AppSearch(search) => {
@@ -1729,6 +1747,7 @@ impl Application for App {
                     .push(
                         widget::container(
                             widget::search_input(fl!("search-processes"), search_value)
+                                .id(self.search_id.clone())
                                 .on_clear(clear_message)
                                 .on_input(input_message)
                                 .width(360.0),
