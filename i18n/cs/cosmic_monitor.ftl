@@ -1,4 +1,4 @@
-menu-about = O aplikaci...
+menu-about = O aplikaci Sledování systému COSMIC...
 quit-body = Chcete ukončit proces „{ $name }“?
 quit-title = Ukončit proces?
 quit = Ukončit
@@ -68,3 +68,10 @@ quit-app-title = Ukončit aplikaci „{ $name }“?
 force-quit-app-title = Vynutit ukončení aplikace „{ $name }“?
 quit-app-body = Následující procesy budou ukončeny.
 force-quit-app-body = Následující procesy budou okamžitě a násilně ukončeny. Operace prováděné při běžném ukončení nebudou dokončeny a neobjeví se žádné varování.
+high = Vysoká
+low = Nízká
+normal = Normální
+very-high = Velmi vysoká
+very-low = Velmi nízká
+read = čtení
+write = zápis

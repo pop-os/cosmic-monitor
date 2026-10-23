@@ -286,6 +286,7 @@ pub enum Message {
     Graph(GraphItem),
     LaunchUrl(String),
     NavPage(NavPage),
+    AppSearch(String),
     ProcessSearch(String),
     ProcessSort(ProcessCategory),
     ScrollHeader(Viewport),
@@ -294,7 +295,7 @@ pub enum Message {
     Select(Option<SelectedItem>),
     Size(window::Id, Size),
     Snapshot(GraphItem, Vec<ProcessItem>, Vec<ProcessItem>),
-    Surface(surface::Action),
+    Surface(surface::Action<Message>),
     SystemThemeChange,
     ToggleContextPage(ContextPage),
 }
@@ -371,6 +372,7 @@ pub struct App {
     nav_model: segmented_button::SingleSelectModel,
     processes: Vec<ProcessItem>,
     process_content: iced::widget::list::Content<ProcessItem>,
+    app_search: (String, Option<Regex>),
     process_search: (String, Option<Regex>),
     process_sort: (ProcessCategory, bool),
     scroll_header_id: widget::Id,
@@ -409,10 +411,19 @@ impl App {
             }
         });
 
+        let search = if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
+            &self.app_search
+        } else {
+            &self.process_search
+        };
+
         let mut i = 0;
         for item in list.iter() {
-            if let Some(regex) = &self.process_search.1 {
-                if !item.matches(&regex) {
+            if let Some(regex) = &search.1 {
+                if !item.matches(regex) {
                     continue;
                 }
             }
@@ -829,12 +840,14 @@ impl App {
             String::new(),
             widget::column!(
                 widget::text::body(format!(
-                    "{}/s read",
+                    "{}/s {}",
                     humansize::format_size(disk_io.0 as u64, humansize::DECIMAL),
+                    fl!("read"),
                 )),
                 widget::text::body(format!(
-                    "{}/s write",
+                    "{}/s {}",
                     humansize::format_size((disk_io.1) as u64, humansize::DECIMAL),
+                    fl!("write"),
                 ))
             )
             .spacing(space_xxxs)
@@ -1155,6 +1168,7 @@ impl Application for App {
             .comments(fl!("comment"))
             .license("GPL-3.0-only")
             .license_url("https://spdx.org/licenses/GPL-3.0-only")
+            .developers([("System76", "info@system76.com")])
             .links([
                 (
                     fl!("repository"),
@@ -1197,6 +1211,7 @@ impl Application for App {
             nav_model: nav_model.build(),
             processes: Vec::new(),
             process_content: iced::widget::list::Content::new(),
+            app_search: (String::new(), None),
             process_search: (String::new(), None),
             process_sort: (ProcessCategory::default(), false),
             scroll_header_id: widget::Id::unique(),
@@ -1227,7 +1242,11 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
+        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+            if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
+                return self.update(Message::AppSearch(String::new()));
+            }
+        } else if !self.process_search.0.is_empty() || self.process_search.1.is_some() {
             return self.update(Message::ProcessSearch(String::new()));
         }
         Task::none()
@@ -1356,6 +1375,18 @@ impl Application for App {
                     self.update_snapshot();
                 }
             }
+            Message::AppSearch(search) => {
+                let regex_opt = if !search.is_empty() {
+                    RegexBuilder::new(&regex::escape(&search))
+                        .case_insensitive(true)
+                        .build()
+                        .ok()
+                } else {
+                    None
+                };
+                self.app_search = (search, regex_opt);
+                self.update_snapshot();
+            }
             Message::ProcessSearch(search) => {
                 let regex_opt = if !search.is_empty() {
                     RegexBuilder::new(&regex::escape(&search))
@@ -1422,9 +1453,7 @@ impl Application for App {
                 self.update_snapshot();
             }
             Message::Surface(a) => {
-                return cosmic::task::message(cosmic::Action::Cosmic(
-                    cosmic::app::Action::Surface(a),
-                ));
+                return cosmic::task::message(cosmic::Action::Surface(a));
             }
             Message::SystemThemeChange => {
                 return self.update_config();
@@ -1680,12 +1709,28 @@ impl Application for App {
                 };
             }
             (NavPage::Applications | NavPage::Processes, _) => {
+                let (search_value, clear_message, input_message): (
+                    &String,
+                    Message,
+                    fn(String) -> Message,
+                ) = match nav_page {
+                    NavPage::Applications => (
+                        &self.app_search.0,
+                        Message::AppSearch(String::new()),
+                        Message::AppSearch as fn(String) -> Message,
+                    ),
+                    _ => (
+                        &self.process_search.0,
+                        Message::ProcessSearch(String::new()),
+                        Message::ProcessSearch as fn(String) -> Message,
+                    ),
+                };
                 page_header = page_header
                     .push(
                         widget::container(
-                            widget::search_input(fl!("search-processes"), &self.process_search.0)
-                                .on_clear(Message::ProcessSearch(String::new()))
-                                .on_input(Message::ProcessSearch)
+                            widget::search_input(fl!("search-processes"), search_value)
+                                .on_clear(clear_message)
+                                .on_input(input_message)
                                 .width(360.0),
                         )
                         .align_x(Alignment::Center)
@@ -2336,7 +2381,11 @@ impl Application for App {
                 }
                 column.into()
             }
+            // The animated loading indicator can lag the UI when not using WGPU
+            #[cfg(feature = "wgpu")]
             _ => widget::indeterminate_circular().into(),
+            #[cfg(not(feature = "wgpu"))]
+            _ => widget::space().into(),
         };
         let content = widget::mouse_area(
             widget::column!(
