@@ -21,7 +21,6 @@ use cosmic::{
     widget::{
         self,
         about::About,
-        canvas,
         menu::{action::MenuAction, key_bind::KeyBind},
         nav_bar, segmented_button,
         table::{ItemCategory, ItemInterface},
@@ -41,7 +40,7 @@ use sysinfo::Pid;
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
 
-use graph::{Graph, GraphKind};
+use graph::{Graph, GraphKind, SMALL_GRAPH_HEIGHT};
 mod graph;
 
 use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
@@ -55,8 +54,6 @@ use crate::graph::ProcGraphKind;
 mod menu;
 
 const CARD_DATA_HEIGHT: f32 = 62.0;
-const SMALL_GRAPH_HEIGHT: f32 = 207.0;
-const LARGE_GRAPH_HEIGHT: f32 = 300.0;
 const MIN_GRAPH_WIDTH: f32 = 640.0;
 const MIN_PROCESSES_WIDTH: f32 = 720.0;
 
@@ -762,9 +759,7 @@ impl App {
 
             widget::container(
                 widget::row!(
-                    canvas(Graph::new(graph_kind, &self.graph_history).border())
-                        .height(SMALL_GRAPH_HEIGHT)
-                        .width(Length::Fill),
+                    Graph::new(graph_kind, &self.graph_history).small(),
                     column.width(Length::Fill)
                 )
                 .spacing(space_xs),
@@ -1854,12 +1849,7 @@ impl Application for App {
                         widget::column!(
                             widget::text::title4(fl!("overall-utilization")),
                             row,
-                            canvas(
-                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
-                                    .legend()
-                            )
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                            Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1953,9 +1943,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::Memory, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1984,9 +1972,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Swap, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::Swap, &self.graph_history),
                     )
                     .spacing(space_xxs);
                     if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
@@ -2080,21 +2066,16 @@ impl Application for App {
                                         widget::column!(
                                             widget::text::title4(fl!("gpu-utilization")),
                                             row,
-                                            canvas(
-                                                Graph::new(
-                                                    GraphKind::Gpu(
-                                                        gpu.id,
-                                                        self.gpu_graphs
-                                                            .get(&gpu.id)
-                                                            .copied()
-                                                            .unwrap_or_default()
-                                                    ),
-                                                    &self.graph_history
-                                                )
-                                                .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill),
+                                            Graph::new(
+                                                GraphKind::Gpu(
+                                                    gpu.id,
+                                                    self.gpu_graphs
+                                                        .get(&gpu.id)
+                                                        .copied()
+                                                        .unwrap_or_default()
+                                                ),
+                                                &self.graph_history
+                                            ),
                                         )
                                         .spacing(space_xxs)
                                         .into()
@@ -2134,15 +2115,10 @@ impl Application for App {
                                                     ),
                                                 )
                                                 .spacing(space_m),
-                                                canvas(
-                                                    Graph::new(
-                                                        GraphKind::GpuVram(gpu.id),
-                                                        &self.graph_history
-                                                    )
-                                                    .legend(),
-                                                )
-                                                .height(LARGE_GRAPH_HEIGHT)
-                                                .width(Length::Fill),
+                                                Graph::new(
+                                                    GraphKind::GpuVram(gpu.id),
+                                                    &self.graph_history
+                                                ),
                                             )
                                             .spacing(space_xxs)
                                             .into()
@@ -2208,9 +2184,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::DiskTotal, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -2280,12 +2254,7 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
@@ -2329,9 +2298,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::NetworkTotal, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::NetworkTotal, &self.graph_history),
                     )
                     .spacing(space_xxs),
                 );
@@ -2366,20 +2333,15 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
                                 }
                                 if size.width > 800.0 {
-                                    Element::from(widget::row(graphs))
+                                    Element::from(widget::row(graphs).spacing(space_xxl))
                                 } else {
-                                    Element::from(widget::column(graphs))
+                                    Element::from(widget::column(graphs).spacing(space_xxs))
                                 }
                             })
                         )
