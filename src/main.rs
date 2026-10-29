@@ -21,7 +21,6 @@ use cosmic::{
     widget::{
         self,
         about::About,
-        canvas,
         menu::{action::MenuAction, key_bind::KeyBind},
         nav_bar, segmented_button,
         table::{ItemCategory, ItemInterface},
@@ -41,7 +40,7 @@ use sysinfo::Pid;
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
 
-use graph::{Graph, GraphKind};
+use graph::{Graph, GraphKind, SMALL_GRAPH_HEIGHT};
 mod graph;
 
 use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
@@ -55,8 +54,6 @@ use crate::graph::ProcGraphKind;
 mod menu;
 
 const CARD_DATA_HEIGHT: f32 = 62.0;
-const SMALL_GRAPH_HEIGHT: f32 = 207.0;
-const LARGE_GRAPH_HEIGHT: f32 = 300.0;
 const MIN_GRAPH_WIDTH: f32 = 640.0;
 const MIN_PROCESSES_WIDTH: f32 = 720.0;
 
@@ -628,16 +625,23 @@ impl App {
         .into()
     }
 
+    fn side_padding(&self) -> u16 {
+        if self.core.is_condensed() {
+            theme::spacing().space_s
+        } else {
+            theme::spacing().space_l
+        }
+    }
+
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
-            space_xl,
             space_s,
             space_xs,
             space_xxs,
             space_xxxs,
             ..
         } = theme::active().cosmic().spacing;
-
+        let padding = self.side_padding();
         let card = |graph_kind,
                     name,
                     caption,
@@ -755,9 +759,7 @@ impl App {
 
             widget::container(
                 widget::row!(
-                    canvas(Graph::new(graph_kind, &self.graph_history).border())
-                        .height(SMALL_GRAPH_HEIGHT)
-                        .width(Length::Fill),
+                    Graph::new(graph_kind, &self.graph_history).small(),
                     column.width(Length::Fill)
                 )
                 .spacing(space_xs),
@@ -974,7 +976,7 @@ impl App {
 
         let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
         let min_width = 440.0;
-        let content_width = size.width - (space_xl * 2) as f32;
+        let content_width = size.width - (padding * 2) as f32;
         enum DashboardLayout {
             Small,
             Medium,
@@ -1120,7 +1122,7 @@ impl App {
         widget::mouse_area(
             widget::scrollable(
                 widget::container(content)
-                    .padding([0, space_xl, space_s, space_xl])
+                    .padding([0, padding, space_s, padding])
                     .width(Length::Fill),
             )
             .width(Length::Fill)
@@ -1242,7 +1244,10 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
@@ -1674,7 +1679,6 @@ impl Application for App {
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
             space_xxl,
-            space_xl,
             space_l,
             space_m,
             space_s,
@@ -1682,12 +1686,12 @@ impl Application for App {
             space_xxs,
             ..
         } = theme::active().cosmic().spacing;
-
+        let padding = self.side_padding();
         let nav_page = self
             .nav_model
             .active_data::<NavPage>()
             .map_or(NavPage::Dashboard, |x| *x);
-        let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
+        let mut page_header = widget::column::with_capacity(6).padding([0, padding]);
         page_header = page_header
             .push(
                 widget::button::text(fl!("dashboard"))
@@ -1760,13 +1764,11 @@ impl Application for App {
                     let header =
                         table_header(&categories, self.process_sort.0, self.process_sort.1, true);
                     widget::column!(
-                        iced::widget::scrollable(
-                            header.padding([0, space_xl, 0, space_xl]).width(width),
-                        )
-                        .direction(Direction::Horizontal(Scrollbar::hidden()))
-                        .id(self.scroll_header_id.clone())
-                        .on_scroll(Message::ScrollHeader)
-                        .width(Length::Fill),
+                        iced::widget::scrollable(header.padding([0, padding]).width(width))
+                            .direction(Direction::Horizontal(Scrollbar::hidden()))
+                            .id(self.scroll_header_id.clone())
+                            .on_scroll(Message::ScrollHeader)
+                            .width(Length::Fill),
                         widget::scrollable(
                             widget::container(iced::widget::List::new(
                                 &self.process_content,
@@ -1777,7 +1779,7 @@ impl Application for App {
                                         .into()
                                 },
                             ))
-                            .padding([0, space_xl, 0, space_xl])
+                            .padding([0, padding])
                             .width(width),
                         )
                         .direction(direction)
@@ -1847,12 +1849,7 @@ impl Application for App {
                         widget::column!(
                             widget::text::title4(fl!("overall-utilization")),
                             row,
-                            canvas(
-                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
-                                    .legend()
-                            )
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                            Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1946,9 +1943,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::Memory, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1977,9 +1972,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Swap, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::Swap, &self.graph_history),
                     )
                     .spacing(space_xxs);
                     if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
@@ -2073,21 +2066,16 @@ impl Application for App {
                                         widget::column!(
                                             widget::text::title4(fl!("gpu-utilization")),
                                             row,
-                                            canvas(
-                                                Graph::new(
-                                                    GraphKind::Gpu(
-                                                        gpu.id,
-                                                        self.gpu_graphs
-                                                            .get(&gpu.id)
-                                                            .copied()
-                                                            .unwrap_or_default()
-                                                    ),
-                                                    &self.graph_history
-                                                )
-                                                .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill),
+                                            Graph::new(
+                                                GraphKind::Gpu(
+                                                    gpu.id,
+                                                    self.gpu_graphs
+                                                        .get(&gpu.id)
+                                                        .copied()
+                                                        .unwrap_or_default()
+                                                ),
+                                                &self.graph_history
+                                            ),
                                         )
                                         .spacing(space_xxs)
                                         .into()
@@ -2127,15 +2115,10 @@ impl Application for App {
                                                     ),
                                                 )
                                                 .spacing(space_m),
-                                                canvas(
-                                                    Graph::new(
-                                                        GraphKind::GpuVram(gpu.id),
-                                                        &self.graph_history
-                                                    )
-                                                    .legend(),
-                                                )
-                                                .height(LARGE_GRAPH_HEIGHT)
-                                                .width(Length::Fill),
+                                                Graph::new(
+                                                    GraphKind::GpuVram(gpu.id),
+                                                    &self.graph_history
+                                                ),
                                             )
                                             .spacing(space_xxs)
                                             .into()
@@ -2201,9 +2184,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::DiskTotal, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -2273,12 +2254,7 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
@@ -2322,9 +2298,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::NetworkTotal, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::NetworkTotal, &self.graph_history),
                     )
                     .spacing(space_xxs),
                 );
@@ -2359,20 +2333,15 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
                                 }
                                 if size.width > 800.0 {
-                                    Element::from(widget::row(graphs))
+                                    Element::from(widget::row(graphs).spacing(space_xxl))
                                 } else {
-                                    Element::from(widget::column(graphs))
+                                    Element::from(widget::column(graphs).spacing(space_xxs))
                                 }
                             })
                         )
@@ -2392,7 +2361,7 @@ impl Application for App {
                 page_header,
                 widget::scrollable(
                     widget::container(content)
-                        .padding([0, space_xl, space_s, space_xl])
+                        .padding([0, padding, space_s, padding])
                         .width(Length::Fill)
                 )
                 .width(Length::Fill),
