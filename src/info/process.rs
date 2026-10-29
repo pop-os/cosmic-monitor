@@ -21,14 +21,13 @@ fn best_name(p: &Process) -> String {
     let name = p.name().to_string_lossy().to_string();
     if let Some(cmd) = p
         .cmd()
-        .get(0)
+        .first()
         .map(Path::new)
         .and_then(|x| x.file_name())
         .and_then(|x| x.to_str())
+        && cmd.starts_with(&name)
     {
-        if cmd.starts_with(&name) {
-            return cmd.to_string();
-        }
+        return cmd.to_string();
     }
     if let Some(exe_name) = p.exe().and_then(|x| x.file_name()).and_then(|x| x.to_str()) {
         if exe_name.starts_with(&name) {
@@ -230,7 +229,7 @@ impl ProcessItem {
         p: &Process,
         sys: &System,
         gpus: &[GpuItem],
-        platform: &Box<dyn Platform>,
+        platform: &dyn Platform,
         users: &Users,
         refresh: Duration,
     ) -> Self {
@@ -263,7 +262,7 @@ impl ProcessItem {
 
         let memory = p.memory();
 
-        let name = best_name(&p);
+        let name = best_name(p);
 
         let mut priority = None;
 
@@ -335,7 +334,7 @@ impl ProcessItem {
             if let Some(vram) = info.vram {
                 self.strings.insert(
                     ProcessCategory::GpuVram(*gpu_id, info.index),
-                    format!("{}", format_size(vram, BINARY)),
+                    format_size(vram, BINARY).to_string(),
                 );
             }
         }
@@ -348,12 +347,12 @@ impl ProcessItem {
         if let Some(vram) = self.gpu_total.vram {
             self.strings.insert(
                 ProcessCategory::GpuVramTotal,
-                format!("{}", format_size(vram, BINARY)),
+                format_size(vram, BINARY).to_string(),
             );
         }
         self.strings.insert(
             ProcessCategory::Memory,
-            format!("{}", format_size(self.memory, BINARY)),
+            format_size(self.memory, BINARY).to_string(),
         );
         self.strings.insert(
             ProcessCategory::PID,
@@ -361,20 +360,19 @@ impl ProcessItem {
         );
         self.strings.insert(
             ProcessCategory::Priority,
-            self.priority
-                .map_or("N/A".to_string(), |x| {
-                    if x < -7 {
-                        fl!("very-high")
-                    } else if x < -2 {
-                        fl!("high")
-                    } else if x < 3 {
-                        fl!("normal")
-                    } else if x < 7 {
-                        fl!("low")
-                    } else {
-                        fl!("very-low")
-                    }
-                }),
+            self.priority.map_or("N/A".to_string(), |x| {
+                if x < -7 {
+                    fl!("very-high")
+                } else if x < -2 {
+                    fl!("high")
+                } else if x < 3 {
+                    fl!("normal")
+                } else if x < 7 {
+                    fl!("low")
+                } else {
+                    fl!("very-low")
+                }
+            }),
         );
     }
 
@@ -384,7 +382,7 @@ impl ProcessItem {
             || self
                 .strings
                 .get(&ProcessCategory::PID)
-                .map_or(false, |x| regex.is_match(x))
+                .is_some_and(|x| regex.is_match(x))
     }
 
     pub fn as_selected(&self) -> Option<SelectedItem> {
@@ -449,7 +447,7 @@ impl ItemInterface<ProcessCategory> for ProcessItem {
                 self.app.as_ref().and_then(|x| x.name.as_ref()),
                 other.app.as_ref().and_then(|x| x.name.as_ref()),
             ) {
-                (Some(name), Some(other_name)) => name.cmp(&other_name),
+                (Some(name), Some(other_name)) => name.cmp(other_name),
                 // Sort some name above no name
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,

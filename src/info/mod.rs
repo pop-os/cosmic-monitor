@@ -60,7 +60,7 @@ impl GraphItem {
         components: &Components,
         disks: &Disks,
         networks: &Networks,
-        platform: &Box<dyn Platform>,
+        platform: &dyn Platform,
         refresh: Duration,
     ) -> Self {
         let cpus = sys.cpus();
@@ -72,7 +72,7 @@ impl GraphItem {
         let disk_list = disks.list();
         let mut disk_items = Vec::with_capacity(disk_list.len());
         for disk in disk_list {
-            disk_items.push(platform.disk_item(disk, refresh, &components));
+            disk_items.push(platform.disk_item(disk, refresh, components));
         }
 
         let network_list = networks.list();
@@ -95,7 +95,7 @@ impl GraphItem {
             cpus: cpu_items,
             disks: disk_items,
             gpus: platform.gpus(),
-            memory: MemoryItem::new(&sys),
+            memory: MemoryItem::new(sys),
             networks: network_items,
         }
     }
@@ -281,7 +281,7 @@ pub fn worker() -> impl Stream<Item = Message> {
                                 &components,
                                 &disks,
                                 &networks,
-                                &platform,
+                                &**platform,
                                 graph_refresh,
                             ))
                         };
@@ -336,7 +336,7 @@ pub fn worker() -> impl Stream<Item = Message> {
                         &components,
                         &disks,
                         &networks,
-                        &platform,
+                        &**platform,
                         processes_refresh,
                     );
 
@@ -352,19 +352,18 @@ pub fn worker() -> impl Stream<Item = Message> {
                             process,
                             &sys,
                             &graph_item.gpus,
-                            &platform,
+                            &**platform,
                             &users,
                             processes_refresh,
                         );
                         if let Some(app) = &item.app {
                             let app_item = apps
                                 .entry((app.id.clone(), item.username.clone()))
-                                .or_insert_with(|| {
-                                    let mut app_item = ProcessItem::default();
-                                    app_item.app = Some(app.clone());
-                                    app_item.name = app.name.clone().unwrap_or_default();
-                                    app_item.username = item.username.clone();
-                                    app_item
+                                .or_insert_with(|| ProcessItem {
+                                    app: Some(app.clone()),
+                                    name: app.name.clone().unwrap_or_default(),
+                                    username: item.username.clone(),
+                                    ..Default::default()
                                 });
                             app_item.cpu_usage += item.cpu_usage;
                             app_item.disk_read += item.disk_read;

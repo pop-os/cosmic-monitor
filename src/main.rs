@@ -422,14 +422,14 @@ impl App {
 
         let mut i = 0;
         for item in list.iter() {
-            if let Some(regex) = &search.1 {
-                if !item.matches(regex) {
-                    continue;
-                }
+            if let Some(regex) = &search.1
+                && !item.matches(regex)
+            {
+                continue;
             }
             if i >= self.process_content.len() {
                 self.process_content.push(item.clone());
-            } else if self.process_content.get(i) != Some(&item) {
+            } else if self.process_content.get(i) != Some(item) {
                 *self.process_content.get_mut(i).unwrap() = item.clone();
             }
             i += 1;
@@ -813,19 +813,15 @@ impl App {
         items.push(card(
             GraphKind::Memory,
             fl!("memory"),
-            format!(
-                "{}",
-                humansize::format_size(graph_item.memory.total, humansize::BINARY),
-            ),
+            humansize::format_size(graph_item.memory.total, humansize::BINARY).to_string(),
             widget::column!(
                 widget::text::body(format!(
                     "{:.1}%",
                     100.0 * (graph_item.memory.used as f32) / (graph_item.memory.total as f32),
                 )),
-                widget::text::body(format!(
-                    "{}",
-                    humansize::format_size(graph_item.memory.used, humansize::BINARY),
-                ))
+                widget::text::body(
+                    humansize::format_size(graph_item.memory.used, humansize::BINARY).to_string()
+                )
             )
             .spacing(space_xxxs)
             .into(),
@@ -937,38 +933,38 @@ impl App {
                     Message::GpuSelect(gpu_i),
                 ));
             }
-            if let Some(vram_used) = gpu.vram_used {
-                if let Some(vram_total) = gpu.vram_total {
-                    let (data, process_category) = match gpu.state {
-                        GpuState::Active | GpuState::Idle(_) => (
-                            widget::column!(
-                                widget::text::body(format!(
-                                    "{:.1}%",
-                                    100.0 * (vram_used as f32) / (vram_total as f32),
-                                ),),
-                                widget::text::body(format!(
-                                    "{} / {}",
-                                    humansize::format_size(vram_used, humansize::BINARY),
-                                    humansize::format_size(vram_total, humansize::BINARY),
-                                ),),
-                            )
-                            .spacing(space_xxxs)
-                            .into(),
-                            Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
-                        ),
-                        GpuState::Suspended => {
-                            (widget::text::body(fl!("gpu-suspended-title")).into(), None)
-                        }
-                    };
-                    items.push(card(
-                        GraphKind::GpuVram(gpu.id),
-                        fl!("gpu-vram-index", index = gpu_i),
-                        gpu.name.clone(),
-                        data,
-                        process_category,
-                        Message::GpuSelect(gpu_i),
-                    ));
-                }
+            if let Some(vram_used) = gpu.vram_used
+                && let Some(vram_total) = gpu.vram_total
+            {
+                let (data, process_category) = match gpu.state {
+                    GpuState::Active | GpuState::Idle(_) => (
+                        widget::column!(
+                            widget::text::body(format!(
+                                "{:.1}%",
+                                100.0 * (vram_used as f32) / (vram_total as f32),
+                            ),),
+                            widget::text::body(format!(
+                                "{} / {}",
+                                humansize::format_size(vram_used, humansize::BINARY),
+                                humansize::format_size(vram_total, humansize::BINARY),
+                            ),),
+                        )
+                        .spacing(space_xxxs)
+                        .into(),
+                        Some(ProcessCategory::GpuVram(gpu.id, Some(gpu_i))),
+                    ),
+                    GpuState::Suspended => {
+                        (widget::text::body(fl!("gpu-suspended-title")).into(), None)
+                    }
+                };
+                items.push(card(
+                    GraphKind::GpuVram(gpu.id),
+                    fl!("gpu-vram-index", index = gpu_i),
+                    gpu.name.clone(),
+                    data,
+                    process_category,
+                    Message::GpuSelect(gpu_i),
+                ));
             }
         }
 
@@ -999,7 +995,7 @@ impl App {
         while cols < 4 && graphs_width / ((cols + 1) as f32) > min_width {
             cols += 1;
         }
-        let rows = (items.len() + cols - 1) / cols;
+        let rows = items.len().div_ceil(cols);
         let mut column = widget::column::with_capacity(rows).spacing(space_s);
 
         // Graphs
@@ -1242,7 +1238,10 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
@@ -1343,10 +1342,10 @@ impl Application for App {
             }
             Message::GpuSelect(gpu_i) => {
                 self.gpu_id_opt = None;
-                if let Some(graph_item) = &self.graph_snapshot {
-                    if let Some(gpu) = graph_item.gpus.get(gpu_i) {
-                        self.gpu_id_opt = Some(gpu.id);
-                    }
+                if let Some(graph_item) = &self.graph_snapshot
+                    && let Some(gpu) = graph_item.gpus.get(gpu_i)
+                {
+                    self.gpu_id_opt = Some(gpu.id);
                 }
                 return self.update(Message::NavPage(NavPage::Gpu));
             }
@@ -1584,7 +1583,7 @@ impl Application for App {
                 let item = self
                     .apps
                     .iter()
-                    .find(|x| x.app.as_ref().map_or(false, |app| &app.id == app_id))?;
+                    .find(|x| x.app.as_ref().is_some_and(|app| &app.id == app_id))?;
                 let processes: Vec<ProcessItem> = self
                     .processes
                     .iter()
@@ -2094,54 +2093,54 @@ impl Application for App {
                                     },
                                 ));
                             }
-                            if let Some(vram_used) = gpu.vram_used {
-                                if let Some(vram_total) = gpu.vram_total {
-                                    // GPU VRAM and top processes
-                                    column = column.push(self.responsive_graph_top_processes(
-                                        ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
-                                        move || {
-                                            widget::column!(
-                                                widget::text::title4(fl!("gpu-vram")),
-                                                widget::row!(
-                                                    widget::column!(
-                                                        widget::text::body(fl!("capacity")),
-                                                        widget::text::heading(
-                                                            humansize::format_size(
-                                                                vram_total,
-                                                                humansize::BINARY
-                                                            )
-                                                            .to_string()
+                            if let Some(vram_used) = gpu.vram_used
+                                && let Some(vram_total) = gpu.vram_total
+                            {
+                                // GPU VRAM and top processes
+                                column = column.push(self.responsive_graph_top_processes(
+                                    ProcessCategory::GpuVram(gpu.id, Some(gpu_i)),
+                                    move || {
+                                        widget::column!(
+                                            widget::text::title4(fl!("gpu-vram")),
+                                            widget::row!(
+                                                widget::column!(
+                                                    widget::text::body(fl!("capacity")),
+                                                    widget::text::heading(
+                                                        humansize::format_size(
+                                                            vram_total,
+                                                            humansize::BINARY
                                                         )
-                                                    ),
-                                                    widget::column!(
-                                                        widget::text::body(fl!("vram")),
-                                                        widget::text::heading(format!(
-                                                            "{} ({:.1}%)",
-                                                            humansize::format_size(
-                                                                vram_used,
-                                                                humansize::BINARY
-                                                            ),
-                                                            100.0 * (vram_used as f64)
-                                                                / (vram_total as f64)
-                                                        ))
-                                                    ),
-                                                )
-                                                .spacing(space_m),
-                                                canvas(
-                                                    Graph::new(
-                                                        GraphKind::GpuVram(gpu.id),
-                                                        &self.graph_history
+                                                        .to_string()
                                                     )
-                                                    .legend(),
-                                                )
-                                                .height(LARGE_GRAPH_HEIGHT)
-                                                .width(Length::Fill),
+                                                ),
+                                                widget::column!(
+                                                    widget::text::body(fl!("vram")),
+                                                    widget::text::heading(format!(
+                                                        "{} ({:.1}%)",
+                                                        humansize::format_size(
+                                                            vram_used,
+                                                            humansize::BINARY
+                                                        ),
+                                                        100.0 * (vram_used as f64)
+                                                            / (vram_total as f64)
+                                                    ))
+                                                ),
                                             )
-                                            .spacing(space_xxs)
-                                            .into()
-                                        },
-                                    ));
-                                }
+                                            .spacing(space_m),
+                                            canvas(
+                                                Graph::new(
+                                                    GraphKind::GpuVram(gpu.id),
+                                                    &self.graph_history
+                                                )
+                                                .legend(),
+                                            )
+                                            .height(LARGE_GRAPH_HEIGHT)
+                                            .width(Length::Fill),
+                                        )
+                                        .spacing(space_xxs)
+                                        .into()
+                                    },
+                                ));
                             }
                         }
                         GpuState::Suspended => {
