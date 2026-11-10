@@ -1,9 +1,5 @@
-use freedesktop_desktop_entry::{
-    DesktopEntry, Iter, default_paths, get_languages_from_env, group_entry_from_path,
-};
 use libc::c_uint;
 use std::{
-    cmp::Ordering,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -27,10 +23,10 @@ fn resolve_slave(name: &str) -> Option<PathBuf> {
     let mut slaves = Vec::new();
 
     for entry in slaves_dir.read_dir().ok()? {
-        if let Ok(entry) = entry {
-            if let Ok(name) = entry.file_name().into_string() {
-                slaves.push(name);
-            }
+        if let Ok(entry) = entry
+            && let Ok(name) = entry.file_name().into_string()
+        {
+            slaves.push(name);
         }
     }
 
@@ -50,11 +46,11 @@ fn resolve_to_physical(name: &str) -> Option<PathBuf> {
         let name = physical_c.as_ref().map_or(name, |physical| {
             physical.file_name().unwrap().to_str().unwrap()
         });
-        if let Some(slave) = resolve_slave(name) {
-            if physical.as_ref().map_or(true, |rec| rec != &slave) {
-                physical = Some(slave);
-                continue;
-            }
+        if let Some(slave) = resolve_slave(name)
+            && physical.as_ref() != Some(&slave)
+        {
+            physical = Some(slave);
+            continue;
         }
         break;
     }
@@ -83,7 +79,7 @@ impl LinuxProcess {
         }
     }
 
-    fn update(&mut self, version: u64, nvml: &Box<dyn Platform>) {
+    fn update(&mut self, version: u64, nvml: &dyn Platform) {
         let time = Instant::now();
         let mut fdinfos = FdInfo::for_proc_path(&self.proc_path);
         let duration = time.saturating_duration_since(self.time).as_secs_f32();
@@ -157,37 +153,8 @@ impl LinuxPlatform {
             }
         }
 
-        //TODO: use this on all Unix-like systems
         //TODO: refresh on changes
-        let locales = get_languages_from_env();
-        let mut app_entries = Vec::new();
-        for app in Iter::new(default_paths())
-            .filter_map(|p| DesktopEntry::from_path(p, Some(&locales)).ok())
-        {
-            let Ok(args) = app.parse_exec() else { continue };
-            let id = app.id().to_string();
-            let mut icon = app.icon().map(|x| x.to_string());
-
-            // Fixup for firefox user app icon
-            if icon.is_none() && id.starts_with("userapp-Firefox-") {
-                icon = Some("firefox".to_string());
-            }
-
-            app_entries.push(Arc::new(AppEntry {
-                id,
-                icon,
-                name: app.full_name(&locales).map(|x| x.to_string()),
-                no_display: app.no_display(),
-                args,
-            }));
-        }
-
-        // Sort no_display below
-        app_entries.sort_by(|a, b| match (a.no_display, b.no_display) {
-            (false, true) => Ordering::Less,
-            (true, false) => Ordering::Greater,
-            _ => a.name.cmp(&b.name),
-        });
+        let app_entries = AppEntry::get_entries();
 
         let pci_db = match pciid_parser::Database::read() {
             Ok(db) => db,
@@ -217,11 +184,11 @@ impl LinuxPlatform {
 
     fn update_disk(&self, disk: &Disk, item: &mut DiskItem, components: &Components) -> Option<()> {
         let orig_dev_path = disk.name();
-        let virt_dev_path = fs::canonicalize(&orig_dev_path).ok()?;
+        let virt_dev_path = fs::canonicalize(orig_dev_path).ok()?;
         let virt_dev_name = virt_dev_path.strip_prefix("/dev/").ok()?.to_string_lossy();
         let dev_path = resolve_to_physical(&virt_dev_name).unwrap_or(virt_dev_path);
         let dev_name = dev_path.strip_prefix("/dev/").ok()?;
-        let sys_class_path = Path::new("/sys/class/block").join(&dev_name);
+        let sys_class_path = Path::new("/sys/class/block").join(dev_name);
         let mut sys_path = fs::canonicalize(&sys_class_path).ok()?;
         // Partitions will be nested inside disk, which is inside device, which is inside subsystem
         // /sys/devices/.../nvme/nvme0/nvme0n1/nvme0n1p1
@@ -293,7 +260,7 @@ impl Platform for LinuxPlatform {
                     self.processes
                         .entry(pid)
                         .or_insert_with(|| LinuxProcess::new(pid, entry.path()))
-                        .update(self.version, &self.nvml)
+                        .update(self.version, &*self.nvml)
                 }
             }
             self.processes.retain(|_k, v| v.version == self.version);
@@ -317,12 +284,11 @@ impl Platform for LinuxPlatform {
                 let device_path = drm_path.join("device");
 
                 let mut id_opt = None;
-                if let Ok(link_path) = fs::read_link(&device_path) {
-                    if let Some(link_name) = link_path.file_name() {
-                        if let Some(link_str) = link_name.to_str() {
-                            id_opt = GpuId::parse_pci(link_str);
-                        }
-                    }
+                if let Ok(link_path) = fs::read_link(&device_path)
+                    && let Some(link_name) = link_path.file_name()
+                    && let Some(link_str) = link_name.to_str()
+                {
+                    id_opt = GpuId::parse_pci(link_str);
                 }
 
                 let name_from_pci_ids = || -> Result<String, Box<dyn std::error::Error>> {
@@ -435,10 +401,10 @@ impl Platform for LinuxPlatform {
                         let Ok(entry) = entry_res else { continue };
 
                         // Check for frequency info
-                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input")) {
-                            if let Ok(hz) = data.trim().parse::<u64>() {
-                                gpu_item.frequency = Some(hz / 1_000_000);
-                            }
+                        if let Ok(data) = fs::read_to_string(entry.path().join("freq1_input"))
+                            && let Ok(hz) = data.trim().parse::<u64>()
+                        {
+                            gpu_item.frequency = Some(hz / 1_000_000);
                         }
 
                         // Check for power info
@@ -448,13 +414,12 @@ impl Platform for LinuxPlatform {
                                 let time = Instant::now();
                                 if let Some((last_time, last_microjoules)) =
                                     self.gpu_energies.insert(gpu_item.id, (time, microjoules))
+                                    && let Some(duration) = time.checked_duration_since(last_time)
                                 {
-                                    if let Some(duration) = time.checked_duration_since(last_time) {
-                                        let microwatts = (microjoules.wrapping_sub(last_microjoules)
-                                            as f32)
-                                            / duration.as_secs_f32();
-                                        gpu_item.power = Some(microwatts / 1_000_000.0);
-                                    }
+                                    let microwatts = (microjoules.wrapping_sub(last_microjoules)
+                                        as f32)
+                                        / duration.as_secs_f32();
+                                    gpu_item.power = Some(microwatts / 1_000_000.0);
                                 }
                             }
                         } else if let Ok(data) =
@@ -538,39 +503,8 @@ impl Platform for LinuxPlatform {
         self.gpu_items.clone()
     }
 
-    fn process_app<'a>(&self, mut process: &'a Process, sys: &'a System) -> Option<Arc<AppEntry>> {
-        // This loops to look for any parent processes that have an associated app, as well
-        //TODO: maximum depth for parent app search?
-        loop {
-            let proc_args = process.cmd();
-
-            // Handle flatpaks
-            match group_entry_from_path(
-                format!("/proc/{}/root/.flatpak-info", process.pid()),
-                "Application",
-                "name",
-            ) {
-                Ok(Some(name)) => {
-                    for app in self.app_entries.iter() {
-                        if app.id == name {
-                            return Some(app.clone());
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            let proc_cmd = proc_args.get(0).and_then(|x| x.to_str())?;
-            let proc_exe = process.exe().and_then(|x| x.to_str())?;
-            for app in self.app_entries.iter() {
-                let Some(cmd) = app.args.get(0) else { continue };
-                if proc_cmd == cmd || proc_exe == cmd {
-                    return Some(app.clone());
-                }
-            }
-            let parent = process.parent()?;
-            process = sys.process(parent)?;
-        }
+    fn process_app(&self, process: &Process, sys: &System) -> Option<Arc<AppEntry>> {
+        AppEntry::process_app(&self.app_entries, process, sys)
     }
 
     fn process_gpu_usage(&self, pid: Pid) -> HashMap<GpuId, (f32, u64)> {
