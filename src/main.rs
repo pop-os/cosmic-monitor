@@ -21,7 +21,6 @@ use cosmic::{
     widget::{
         self,
         about::About,
-        canvas,
         menu::{action::MenuAction, key_bind::KeyBind},
         nav_bar, segmented_button,
         table::{ItemCategory, ItemInterface},
@@ -41,7 +40,7 @@ use sysinfo::Pid;
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
 
-use graph::{Graph, GraphKind};
+use graph::{Graph, GraphKind, SMALL_GRAPH_HEIGHT};
 mod graph;
 
 use info::{GpuId, GpuState, GraphItem, ProcessCategory, ProcessItem};
@@ -55,8 +54,6 @@ use crate::graph::ProcGraphKind;
 mod menu;
 
 const CARD_DATA_HEIGHT: f32 = 62.0;
-const SMALL_GRAPH_HEIGHT: f32 = 207.0;
-const LARGE_GRAPH_HEIGHT: f32 = 300.0;
 const MIN_GRAPH_WIDTH: f32 = 640.0;
 const MIN_PROCESSES_WIDTH: f32 = 720.0;
 
@@ -630,14 +627,12 @@ impl App {
 
     fn view_dashboard<'a>(&'a self, graph_item: &'a GraphItem, size: Size) -> Element<'a, Message> {
         let cosmic_theme::Spacing {
-            space_xl,
             space_s,
             space_xs,
             space_xxs,
             space_xxxs,
             ..
         } = theme::active().cosmic().spacing;
-
         let card = |graph_kind,
                     name,
                     caption,
@@ -755,9 +750,7 @@ impl App {
 
             widget::container(
                 widget::row!(
-                    canvas(Graph::new(graph_kind, &self.graph_history).border())
-                        .height(SMALL_GRAPH_HEIGHT)
-                        .width(Length::Fill),
+                    Graph::new(graph_kind, &self.graph_history).small(),
                     column.width(Length::Fill)
                 )
                 .spacing(space_xs),
@@ -974,7 +967,7 @@ impl App {
 
         let card_height = space_s as f32 + SMALL_GRAPH_HEIGHT + space_s as f32;
         let min_width = 440.0;
-        let content_width = size.width - (space_xl * 2) as f32;
+        let content_width = size.width;
         enum DashboardLayout {
             Small,
             Medium,
@@ -1117,17 +1110,9 @@ impl App {
             }
         };
 
-        widget::mouse_area(
-            widget::scrollable(
-                widget::container(content)
-                    .padding([0, space_xl, space_s, space_xl])
-                    .width(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill),
-        )
-        .on_press(Message::Select(None))
-        .into()
+        widget::mouse_area(self.scrollable_view(content))
+            .on_press(Message::Select(None))
+            .into()
     }
 }
 
@@ -1242,7 +1227,10 @@ impl Application for App {
         if self.selected.take().is_some() {
             return Task::none();
         }
-        if matches!(self.nav_model.active_data::<NavPage>(), Some(NavPage::Applications)) {
+        if matches!(
+            self.nav_model.active_data::<NavPage>(),
+            Some(NavPage::Applications)
+        ) {
             if !self.app_search.0.is_empty() || self.app_search.1.is_some() {
                 return self.update(Message::AppSearch(String::new()));
             }
@@ -1674,28 +1662,23 @@ impl Application for App {
     fn view(&self) -> Element<'_, Self::Message> {
         let cosmic_theme::Spacing {
             space_xxl,
-            space_xl,
             space_l,
             space_m,
-            space_s,
             space_xs,
             space_xxs,
             ..
         } = theme::active().cosmic().spacing;
-
         let nav_page = self
             .nav_model
             .active_data::<NavPage>()
             .map_or(NavPage::Dashboard, |x| *x);
-        let mut page_header = widget::column::with_capacity(6).padding([0, space_xl]);
-        page_header = page_header
-            .push(
-                widget::button::text(fl!("dashboard"))
-                    .leading_icon(widget::icon::from_name("go-previous-symbolic"))
-                    .on_press(Message::NavPage(NavPage::Dashboard)),
-            )
-            .push(widget::column!(widget::text::title2(nav_page.title())))
-            .push(widget::space().height(space_m));
+        let mut page_header = widget::column::with_capacity(2).spacing(space_m);
+        page_header = page_header.push(widget::column!(
+            widget::button::text(fl!("dashboard"))
+                .leading_icon(widget::icon::from_name("go-previous-symbolic"))
+                .on_press(Message::NavPage(NavPage::Dashboard)),
+            widget::text::title2(nav_page.title())
+        ));
         let content: Element<Message> = match (nav_page, &self.graph_snapshot) {
             (NavPage::Dashboard, Some(graph_item)) => {
                 let content = widget::responsive(|size| self.view_dashboard(graph_item, size))
@@ -1725,18 +1708,16 @@ impl Application for App {
                         Message::ProcessSearch as fn(String) -> Message,
                     ),
                 };
-                page_header = page_header
-                    .push(
-                        widget::container(
-                            widget::search_input(fl!("search-processes"), search_value)
-                                .on_clear(clear_message)
-                                .on_input(input_message)
-                                .width(360.0),
-                        )
-                        .align_x(Alignment::Center)
-                        .width(Length::Fill),
+                page_header = page_header.push(
+                    widget::container(
+                        widget::search_input(fl!("search-processes"), search_value)
+                            .on_clear(clear_message)
+                            .on_input(input_message)
+                            .width(360.0),
                     )
-                    .push(widget::space().height(space_m));
+                    .align_x(Alignment::Center)
+                    .width(Length::Fill),
+                );
 
                 let responsive = widget::responsive(move |size| {
                     //TODO: table is too slow, this uses list to emulate table
@@ -1760,13 +1741,11 @@ impl Application for App {
                     let header =
                         table_header(&categories, self.process_sort.0, self.process_sort.1, true);
                     widget::column!(
-                        iced::widget::scrollable(
-                            header.padding([0, space_xl, 0, space_xl]).width(width),
-                        )
-                        .direction(Direction::Horizontal(Scrollbar::hidden()))
-                        .id(self.scroll_header_id.clone())
-                        .on_scroll(Message::ScrollHeader)
-                        .width(Length::Fill),
+                        iced::widget::scrollable(header.width(width))
+                            .direction(Direction::Horizontal(Scrollbar::hidden()))
+                            .id(self.scroll_header_id.clone())
+                            .on_scroll(Message::ScrollHeader)
+                            .width(Length::Fill),
                         widget::scrollable(
                             widget::container(iced::widget::List::new(
                                 &self.process_content,
@@ -1777,22 +1756,20 @@ impl Application for App {
                                         .into()
                                 },
                             ))
-                            .padding([0, space_xl, 0, space_xl])
                             .width(width),
                         )
                         .direction(direction)
                         .id(self.scroll_table_id.clone())
                         .on_scroll(Message::ScrollTable)
                     )
-                    .padding([0, 0, space_xxs, 0])
                     .into()
                 });
 
                 // Custom view for horizontal scrolling
                 let content = widget::mouse_area(
-                    widget::column!(page_header, responsive,)
-                        .width(Length::Fill)
-                        .height(Length::Fill),
+                    self.scrollable_view(responsive)
+                        .header(page_header)
+                        .header_spacing(space_m),
                 )
                 .on_press(Message::Select(None));
                 return if let Some(id) = self.nav_model.active_data::<widget::Id>() {
@@ -1847,12 +1824,7 @@ impl Application for App {
                         widget::column!(
                             widget::text::title4(fl!("overall-utilization")),
                             row,
-                            canvas(
-                                Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history)
-                                    .legend()
-                            )
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                            Graph::new(GraphKind::Cpu(self.cpu_graph), &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1946,9 +1918,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::Memory, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::Memory, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -1977,9 +1947,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::Swap, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::Swap, &self.graph_history),
                     )
                     .spacing(space_xxs);
                     if size.width > MIN_GRAPH_WIDTH + space_xxl as f32 + MIN_PROCESSES_WIDTH {
@@ -2004,16 +1972,14 @@ impl Application for App {
                     })
                     .or_else(|| graph_item.gpus.first().map(|gpu| (0, gpu)))
                 {
-                    page_header = page_header
-                        .push(
-                            widget::column!(
-                                widget::divider::horizontal::default(),
-                                widget::dropdown(&self.gpu_names, Some(gpu_i), Message::GpuSelect,),
-                                widget::divider::horizontal::default(),
-                            )
-                            .spacing(space_xxs),
+                    page_header = page_header.push(
+                        widget::column!(
+                            widget::divider::horizontal::default(),
+                            widget::dropdown(&self.gpu_names, Some(gpu_i), Message::GpuSelect,),
+                            widget::divider::horizontal::default(),
                         )
-                        .push(widget::space().height(space_m));
+                        .spacing(space_xxs),
+                    );
                     let mut column = widget::column::with_capacity(2).spacing(space_l);
                     match gpu.state {
                         GpuState::Active | GpuState::Idle(_) => {
@@ -2073,21 +2039,16 @@ impl Application for App {
                                         widget::column!(
                                             widget::text::title4(fl!("gpu-utilization")),
                                             row,
-                                            canvas(
-                                                Graph::new(
-                                                    GraphKind::Gpu(
-                                                        gpu.id,
-                                                        self.gpu_graphs
-                                                            .get(&gpu.id)
-                                                            .copied()
-                                                            .unwrap_or_default()
-                                                    ),
-                                                    &self.graph_history
-                                                )
-                                                .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill),
+                                            Graph::new(
+                                                GraphKind::Gpu(
+                                                    gpu.id,
+                                                    self.gpu_graphs
+                                                        .get(&gpu.id)
+                                                        .copied()
+                                                        .unwrap_or_default()
+                                                ),
+                                                &self.graph_history
+                                            ),
                                         )
                                         .spacing(space_xxs)
                                         .into()
@@ -2127,15 +2088,10 @@ impl Application for App {
                                                     ),
                                                 )
                                                 .spacing(space_m),
-                                                canvas(
-                                                    Graph::new(
-                                                        GraphKind::GpuVram(gpu.id),
-                                                        &self.graph_history
-                                                    )
-                                                    .legend(),
-                                                )
-                                                .height(LARGE_GRAPH_HEIGHT)
-                                                .width(Length::Fill),
+                                                Graph::new(
+                                                    GraphKind::GpuVram(gpu.id),
+                                                    &self.graph_history
+                                                ),
                                             )
                                             .spacing(space_xxs)
                                             .into()
@@ -2201,9 +2157,7 @@ impl Application for App {
                                 ),
                             )
                             .spacing(space_m),
-                            canvas(Graph::new(GraphKind::DiskTotal, &self.graph_history).legend())
-                                .height(LARGE_GRAPH_HEIGHT)
-                                .width(Length::Fill),
+                            Graph::new(GraphKind::DiskTotal, &self.graph_history),
                         )
                         .spacing(space_xxs)
                         .into()
@@ -2273,12 +2227,7 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
@@ -2322,9 +2271,7 @@ impl Application for App {
                             ),
                         )
                         .spacing(space_m),
-                        canvas(Graph::new(GraphKind::NetworkTotal, &self.graph_history).legend())
-                            .height(LARGE_GRAPH_HEIGHT)
-                            .width(Length::Fill),
+                        Graph::new(GraphKind::NetworkTotal, &self.graph_history),
                     )
                     .spacing(space_xxs),
                 );
@@ -2359,20 +2306,15 @@ impl Application for App {
                                     graphs.push(Element::from(
                                         widget::column!(
                                             widget::text::title4(title),
-                                            canvas(
-                                                Graph::new(graph_kind, &self.graph_history)
-                                                    .legend(),
-                                            )
-                                            .height(LARGE_GRAPH_HEIGHT)
-                                            .width(Length::Fill)
+                                            Graph::new(graph_kind, &self.graph_history)
                                         )
                                         .spacing(space_xxs),
                                     ));
                                 }
                                 if size.width > 800.0 {
-                                    Element::from(widget::row(graphs))
+                                    Element::from(widget::row(graphs).spacing(space_xxl))
                                 } else {
-                                    Element::from(widget::column(graphs))
+                                    Element::from(widget::column(graphs).spacing(space_xxs))
                                 }
                             })
                         )
@@ -2388,17 +2330,9 @@ impl Application for App {
             _ => widget::space().into(),
         };
         let content = widget::mouse_area(
-            widget::column!(
-                page_header,
-                widget::scrollable(
-                    widget::container(content)
-                        .padding([0, space_xl, space_s, space_xl])
-                        .width(Length::Fill)
-                )
-                .width(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill),
+            self.scrollable_view(content)
+                .header(page_header)
+                .header_spacing(space_m),
         )
         .on_press(Message::Select(None));
         if let Some(id) = self.nav_model.active_data::<widget::Id>() {

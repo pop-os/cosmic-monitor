@@ -3,6 +3,11 @@ comment = System monitor for the COSMIC desktop
 keywords = Monitor;System;Process;CPU;Memory;Network;History;Usage;
 see-all-applications = See all applications
 see-all-processes = See all processes
+utilization-graph = Utilization over 1 minute
+frequency-graph = Frequency over 1 minute
+power-graph = Power draw over 1 minute
+temperature-graph = Temperature over 1 minute
+throughput-graph = Throughput over 1 minute
 
 # Nav Pages
 dashboard = Dashboard
