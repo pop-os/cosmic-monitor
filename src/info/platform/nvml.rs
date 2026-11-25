@@ -116,7 +116,7 @@ impl NvmlPlatform {
             gpu.frequency = device.clock_info(Clock::Graphics).ok().map(u64::from);
 
             let power = (device.power_usage()? as f32) / 1000.0;
-            gpu.power = Some(power as f32);
+            gpu.power = Some(power);
 
             let temp = device.temperature(TemperatureSensor::Gpu)?;
             gpu.temp = Some(temp as f32);
@@ -146,7 +146,7 @@ impl NvmlPlatform {
                             //TODO: use more sample information?
                             self.processes
                                 .entry(pid)
-                                .or_insert_with(|| HashMap::new())
+                                .or_default()
                                 .entry(gpu_id)
                                 .or_insert((0.0, 0))
                                 .0 += sample.sm_util as f32;
@@ -177,7 +177,7 @@ impl NvmlPlatform {
                             let entry = self
                                 .processes
                                 .entry(pid)
-                                .or_insert_with(|| HashMap::new())
+                                .or_default()
                                 .entry(gpu_id)
                                 .or_insert((0.0, 0));
                             entry.1 = entry.1.max(vram);

@@ -3,6 +3,9 @@ use sysinfo::{Components, Disk, Pid, Process, System};
 
 use super::{AppEntry, DiskItem, GpuId, GpuItem};
 
+#[cfg(target_os = "freebsd")]
+mod freebsd;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -35,6 +38,9 @@ impl Platform for FallbackPlatform {}
 
 #[allow(unreachable_code)]
 pub fn default_platform() -> Box<dyn Platform> {
+    #[cfg(target_os = "freebsd")]
+    return Box::new(freebsd::FreeBSDPlatform::new());
+
     #[cfg(target_os = "linux")]
     return Box::new(linux::LinuxPlatform::new());
 
